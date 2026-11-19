@@ -1,0 +1,13 @@
+# reference material (not tracked)
+references/
+
+node_modules/
+dist/
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db
+
+# server save files (local development)
+steal-a-ninja-egg-server/data/*.json

@@ -1,0 +1,255 @@
+/* Phones and tablets: touch controls, and everything on screen scaled to fit the screen. */
+
+/* the page never scrolls or zooms under the player's fingers */
+html, body, .app, .viewport, .viewport canvas { touch-action: none; overscroll-behavior: none; -webkit-user-select: none; user-select: none; }
+
+/* ---------------------------------------------------------------- touch controls */
+.mobile-controls { position: absolute; inset: 0; pointer-events: none; z-index: 5; font-family: 'Fredoka', sans-serif; }
+.joystick {
+  position: absolute; left: 28px; bottom: 28px; width: 150px; height: 150px; border-radius: 50%; pointer-events: auto; touch-action: none;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.06)); border: 3px solid rgba(255, 255, 255, 0.45);
+  display: grid; place-items: center;
+}
+.joystick-knob {
+  width: 64px; height: 64px; border-radius: 50%; background: rgba(255, 255, 255, 0.85); border: 3px solid #14141a;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35); pointer-events: none;
+}
+.touch-btn {
+  position: absolute; display: grid; place-items: center; border-radius: 50%; border: 4px solid #14141a; pointer-events: auto; touch-action: none;
+  color: #fff; font: 800 34px 'Fredoka', sans-serif; -webkit-text-stroke: 1.4px #14141a; paint-order: stroke fill; box-shadow: 0 4px 0 #14141a;
+}
+.touch-btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #14141a; }
+.touch-btn.jump { right: 30px; bottom: 34px; width: 96px; height: 96px; background: linear-gradient(#5fbfff, #1f7ad6); }
+.touch-btn.action { right: 140px; bottom: 60px; width: 80px; height: 80px; background: linear-gradient(#ffd85c, #f2a51f); }
+
+/* on touch screens the bottom-left belongs to the joystick: the speed and cash move up above it */
+/* on touch screens the bottom corners belong to the joystick (left) and Jump/Action (right) */
+@media (pointer: coarse) {
+  .stats { bottom: 200px; }
+  .gift-btn { bottom: 165px; }
+  .boost-bar { bottom: 245px; }
+  .perf { bottom: auto; top: 76px; } /* under the profile card instead of behind the Jump button */
+}
+
+/* ---------------------------------------------------------------- scaling to the screen
+   --ui: the HUD's size, --pop: the popups' size. The HUD uses 'scale' around the corner each item is
+   pinned to (so it stays in its place); the centred popups use 'zoom', which also shrinks their layout. */
+:root { --ui: 1; --pop: 1; --touch: 1; }
+@media (max-height: 760px), (max-width: 1100px) { :root { --ui: 0.85; --pop: 0.85; } }
+@media (max-height: 600px), (max-width: 860px) { :root { --ui: 0.68; --pop: 0.68; --touch: 0.85; } }
+@media (max-height: 440px), (max-width: 640px) { :root { --ui: 0.56; --pop: 0.56; --touch: 0.75; } }
+@media (max-height: 360px) { :root { --ui: 0.48; --pop: 0.5; } }
+
+.side-menu, .slow-mode { scale: var(--ui); transform-origin: 0 0; }
+.side-tabs, .profile-card, .panel, .perf { scale: var(--ui); transform-origin: 100% 0; }
+.stats { scale: var(--ui); transform-origin: 0 100%; }
+.gift-btn, .boost-bar, .carry { scale: var(--ui); transform-origin: 100% 100%; }
+.hotbar, .auto-swing, .objective { scale: var(--ui); transform-origin: 50% 100%; }
+.prompt { scale: var(--ui); }
+.tree-bar { scale: var(--ui); transform-origin: 50% 100%; }
+.joystick { scale: var(--touch); transform-origin: 0 100%; }
+.touch-btn { scale: var(--touch); transform-origin: 100% 100%; }
+
+/* popups: smaller on small screens, never taller or wider than the screen */
+.pop, .sell, .opened { zoom: var(--pop); }
+.pop { max-height: calc(92vh / var(--pop)); width: min(760px, calc(96vw / var(--pop))); }
+.pop.wide { width: min(980px, calc(96vw / var(--pop))); }
+.sell { height: min(720px, calc(92vh / var(--pop))); width: min(1020px, calc(96vw / var(--pop))); }
+.opened { max-height: calc(92vh / var(--pop)); overflow-y: auto; }
+
+/* ---------------------------------------------------------------- the top of the screen
+   The forest banner, RUN!, the hatched-pet reveal and messages sit in ONE stack, one under the
+   other, so they can never overlap each other. The stack stays clear of the corners (Boxity's
+   toolbar on the left, the profile card on the right) and starts below them on narrow screens.
+   Text sizes follow the screen width (clamp), so everything fits on any screen. */
+.top-stack {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 3;
+  width: calc(100vw - 2 * 280px); min-width: 280px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none;
+}
+@media (max-width: 1180px) { .top-stack { top: 76px; width: 94vw; } }
+@media (pointer: coarse) and (max-width: 1180px) { .top-stack { top: calc(var(--boxity-ui-top, 0px) + 72px); } }
+.top-stack > * { position: static; left: auto; top: auto; max-width: 100%; }
+
+.top-stack .zone-banner {
+  transform: none; padding: 4px clamp(16px, 4vw, 60px) 10px; white-space: normal; text-align: center;
+  animation: stack-in 0.35s ease-out, stack-out 0.5s ease-in 3.4s forwards;
+}
+.top-stack .zone-title { flex-wrap: wrap; justify-content: center; gap: clamp(6px, 1.2vw, 16px); }
+.top-stack .zone-title b { font-size: clamp(22px, min(5.4vw, 8vh), 88px); -webkit-text-stroke: clamp(2px, 0.3vw, 4px) #14141a; }
+.top-stack .zone-title svg { width: clamp(28px, min(5vw, 7.5vh), 84px); height: clamp(28px, min(5vw, 7.5vh), 84px); }
+.top-stack .zone-rec { flex-wrap: wrap; justify-content: center; gap: clamp(4px, 0.8vw, 10px); }
+.top-stack .zone-rec span, .top-stack .zone-rec em { font-size: clamp(14px, min(3vw, 4.6vh), 50px); }
+.top-stack .zone-rec svg { width: clamp(20px, min(3.6vw, 5.5vh), 60px); height: clamp(20px, min(3.6vw, 5.5vh), 60px); }
+
+.top-stack .run-banner { transform: none; font-size: clamp(20px, min(3.8vw, 6vh), 52px); padding: 2px clamp(16px, 2.6vw, 34px); animation: stack-pulse 0.45s ease-in-out infinite alternate; }
+.top-stack .reveal { transform: none; animation: stack-pop 0.32s cubic-bezier(0.2, 1.5, 0.4, 1); }
+.top-stack .reveal small { font-size: clamp(13px, min(1.8vw, 2.8vh), 26px); }
+.top-stack .reveal b { font-size: clamp(24px, min(4.8vw, 7vh), 72px); }
+.top-stack .reveal span { font-size: clamp(14px, min(2.2vw, 3.3vh), 30px); }
+.top-stack .reveal em { font-size: clamp(15px, min(2.3vw, 3.5vh), 32px); }
+.top-stack .toast {
+  transform: none; white-space: normal; text-align: center; font-size: clamp(15px, min(2.6vw, 4vh), 38px);
+  -webkit-text-stroke: clamp(1px, 0.15vw, 2px) #14141a; animation: stack-in 0.3s ease-out, stack-out 0.4s ease-in 1.5s forwards;
+}
+@keyframes stack-in { from { transform: translateY(-16px); opacity: 0; } }
+@keyframes stack-pulse { to { transform: scale(1.08); } }
+/* fades AND gives its room back, so the messages under it move up */
+@keyframes stack-out { 0% { opacity: 1; max-height: 50vh; } 99% { opacity: 0; max-height: 50vh; } 100% { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; margin-bottom: calc(-1 * var(--stack-gap)); } }
+@keyframes stack-pop { from { transform: scale(0.4); opacity: 0; } }
+
+/* the right-side tabs never run into the profile card (or the FPS panel under it on phones) */
+.side-tabs { top: max(26%, 132px); }
+
+/* the stack never reaches down into the bottom HUD (goal message, Auto Swing, hotbar) */
+.top-stack { --stack-gap: 10px; gap: var(--stack-gap); }
+/* the bottom column (hotbar, Auto Swing, goal message) shrinks with the HUD, so its offsets do too */
+.objective { top: calc(14px * var(--ui)); bottom: auto; transform-origin: 50% 0; }
+.auto-swing { bottom: calc(112px * var(--ui)); }
+.hotbar { bottom: calc(12px * var(--ui)); }
+
+/* ---------------------------------------------------------------- phones held sideways
+   Short touch screens: every area has one job, so nothing lands on anything else.
+     top centre (narrow column): forest banner, RUN!, the hatched pet, messages
+     bottom centre: goal message, Auto Swing, hotbar
+     left:  Shop / Index / Rebirth, then the joystick with speed and cash beside it
+     right: profile card, Egg and Pets tabs with the free gift and potions beside them, then Action and Jump */
+@media (pointer: coarse) and (max-height: 560px) {
+  html .top-stack { top: calc(var(--boxity-ui-top, 0px) + 8px); width: 56vw; min-width: 0; zoom: 0.8; --stack-gap: 3px; }
+  html .slow-mode, html .perf { display: none; }
+  html .side-menu { top: calc(var(--boxity-ui-top, 0px) + 10px); }
+  /* speed and cash sit just right of the joystick, low and out of the way */
+  html .stats { top: auto; bottom: 10px; left: calc(40px + 150px * var(--touch)); transform-origin: 0 100%; }
+  html .side-tabs { top: 56px; }
+  html .gift-btn { top: calc(62px + 2 * 82px * var(--ui)); bottom: auto; right: 14px; transform-origin: 100% 0; }
+  html .boost-bar { top: calc(70px + 2 * 82px * var(--ui) + 70px * var(--ui)); bottom: auto; right: 14px; transform-origin: 100% 0; }
+  html .objective { left: 0; right: 0; margin-inline: auto; width: max-content; max-width: 76vw; transform: none; white-space: normal; text-align: center; }
+  html .carry { bottom: 10px; right: calc(150px + 96px * var(--touch)); }
+}
+
+/* ---------------------------------------------------------------- every screen: one column on the left
+   Shop / Index / Rebirth, then the Slow Mode / Hide Pets / Hide Eggs switches right under them, both
+   shrinking with the HUD, so the switches never slide under the buttons or the speed and cash. */
+:root { --menu-top: clamp(120px, calc(100vh - 600px * var(--ui)), 36%); }
+.side-menu { top: var(--menu-top); }
+.toggles { top: calc(var(--menu-top) + 296px * var(--ui)); bottom: auto; scale: var(--ui); transform-origin: 0 0; }
+.drop-btn, .mill-bar { scale: var(--ui); transform-origin: 50% 100%; }
+.night-clock { scale: var(--ui); transform-origin: 100% 100%; }
+.pop-x { touch-action: manipulation; }
+
+/* the Eggs / Pets panel opens beside its tab buttons (never over them) and fits on the screen */
+.panel {
+  right: calc(14px + 96px * var(--ui)); top: var(--tabs-top, max(26%, 132px));
+  max-width: calc((100vw - 14px - 96px * var(--ui) - 8px) / var(--ui)); max-height: calc((100vh - var(--tabs-top, max(26%, 132px)) - 16px) / var(--ui));
+}
+.panel-body { min-height: 0; }
+.side-tabs { top: var(--tabs-top, max(26%, 132px)); }
+
+/* popups: the "nothing here" line spans the whole grid, the bottom buttons fit on narrow screens */
+.sell-grid .empty { grid-column: 1 / -1; }
+
+/* ---------------------------------------------------------------- touch screens */
+@media (pointer: coarse) {
+  /* speed and cash sit just right of the joystick, low and out of the way */
+  .stats { top: auto; bottom: 10px; left: calc(40px + 150px * var(--touch)); }
+  .night-clock { bottom: calc(150px + 96px * var(--touch)); }
+  .gift-btn { bottom: calc(190px + 96px * var(--touch)); }
+  .boost-bar { bottom: calc(250px + 96px * var(--touch)); }
+}
+@media (pointer: coarse) and (max-height: 560px) {
+  :root { --menu-top: calc(var(--boxity-ui-top, 0px) + 10px); --tabs-top: 56px; }
+  /* the clock goes under the switches on the left (the right side is full) */
+  html .night-clock { bottom: auto; right: auto; left: 14px; top: calc(var(--menu-top) + 400px * var(--ui)); transform-origin: 0 0; }
+  html .side-tabs { top: calc(56px + 34px * var(--ui)); }
+  html .panel { top: calc(56px + 34px * var(--ui)); max-height: calc((100vh - 56px - 34px * var(--ui) - 10px) / var(--ui)); }
+  html .drop-btn { bottom: calc(80px * var(--ui) + 10px); }
+}
+
+/* ---------------------------------------------------------------- phones held upright
+   The screen is tall and narrow:
+     top: goal line, profile card (right), the clock under it, then the messages
+     middle: Shop / Index / Rebirth and the switches (left), Egg / Pets tabs, gift and potions (right)
+     bottom: speed and cash above the joystick, the bat in the middle, Action above Jump (right) */
+@media (pointer: coarse) and (orientation: portrait) {
+  :root { --ui: 0.6; --pop: 0.62; --touch: 0.8; --menu-top: 30%; --tabs-top: 30%; }
+  html .top-stack { top: calc(var(--boxity-ui-top, 0px) + 96px); width: 94vw; zoom: 0.85; }
+  html .objective { max-width: 60vw; white-space: normal; text-align: center; left: 0; right: 0; margin-inline: auto; width: max-content; transform: none; }
+  html .perf, html .slow-mode { display: none; }
+  html .night-clock { bottom: auto; top: calc(var(--boxity-ui-top, 0px) + 60px); right: 14px; transform-origin: 100% 0; }
+  html .stats { left: 18px; bottom: calc(40px + 150px * var(--touch)); }
+  html .gift-btn { bottom: auto; top: calc(30% + 2 * 92px * var(--ui)); right: 14px; transform-origin: 100% 0; }
+  html .boost-bar { bottom: auto; top: calc(30% + 2 * 92px * var(--ui) + 80px * var(--ui)); right: 14px; transform-origin: 100% 0; max-width: 60vw; }
+  html .carry { right: 14px; bottom: calc(240px * var(--touch)); }
+  html .drop-btn { bottom: calc(110px * var(--ui) + 10px); }
+  html .mill-bar { bottom: calc(180px * var(--touch)); }
+  .touch-btn.jump { right: 22px; bottom: 26px; }
+  .touch-btn.action { right: 30px; bottom: calc(40px + 96px * var(--touch)); }
+  /* panels open under the tabs, across the screen */
+  html .panel { top: calc(30% + 2 * 92px * var(--ui) + 10px); right: 10px; max-height: calc((100vh - 30% - 184px * var(--ui) - 200px) / var(--ui)); }
+  /* popups use the whole width; cards go two (or one) to a row */
+  .pop { max-height: calc(94vh / var(--pop)); width: calc(97vw / var(--pop)); }
+  .sell { height: calc(88vh / var(--pop)); width: calc(97vw / var(--pop)); }
+}
+
+/* the main popups (GamePopups): smaller on small screens, never bigger than the screen */
+.gp-wrap, .gp-confirm { zoom: var(--pop); }
+.gp { max-height: calc(86vh / var(--pop)); width: min(900px, calc(90vw / var(--pop))); }
+.gp.daily { width: min(1000px, calc(94vw / var(--pop))); }
+.gp.offer { width: min(860px, calc(92vw / var(--pop))); }
+.gp.gift-pick { width: min(480px, calc(92vw / var(--pop))); }
+.pi-list { max-height: calc(58vh / var(--pop)); }
+.wi-grid { max-height: calc(64vh / var(--pop)); }
+@media (orientation: portrait) { .gp { width: calc(96vw / var(--pop)); max-height: calc(80vh / var(--pop)); } }
+
+/* ---------------------------------------------------------------- nothing on top of anything else
+   (checked on 360x640 up to 1024x768, both ways round)
+   The messages draw above the HUD buttons (never hidden behind them) but under the popups, and
+   every one of them, the big announcements too, wraps inside the message column. */
+.top-stack { z-index: 6; }
+.top-stack .announce {
+  white-space: normal; text-align: center; max-width: 100%;
+  font-size: clamp(14px, min(2.4vw, 3.6vh), 26px);
+}
+.top-stack .announce.big { font-size: clamp(20px, min(4.4vw, 6.5vh), 64px); }
+
+/* the goal line wraps between the corners: never under the profile card (top right) */
+.objective {
+  left: 50%; right: auto; margin-inline: 0; width: max-content; transform: none; translate: -50% 0; white-space: normal; text-align: center;
+  max-width: calc((100vw - 2 * (300px * var(--ui) + 16px)) / var(--ui));
+}
+
+/* narrower screens: the messages stay between the Shop menu (left) and the Pets tabs (right) */
+@media (max-width: 1180px) {
+  .top-stack { width: calc(100vw - 2 * (24px + 200px * var(--ui))); min-width: 0; }
+}
+@media (max-width: 760px) {
+  .top-stack { width: calc(100vw - 2 * (24px + 120px * var(--ui))); }
+}
+
+/* touch screens: the Shop menu and the switches under it always end above the joystick */
+@media (pointer: coarse) and (orientation: landscape) {
+  :root { --menu-top: max(calc(var(--boxity-ui-top, 0px) + 10px), min(clamp(120px, calc(100vh - 600px * var(--ui)), 36%), calc(100vh - 40px - 150px * var(--touch) - 400px * var(--ui)))); }
+}
+
+/* phones held sideways: the left side only has room for the Shop menu and the joystick */
+@media (pointer: coarse) and (max-height: 560px) {
+  html .top-stack { width: 50vw; }
+  html .objective { left: 50%; right: auto; margin-inline: 0; translate: -50% 0; }
+  /* the switches go above the speed and cash, right of the joystick */
+  html .toggles { left: calc(40px + 150px * var(--touch)); top: auto; bottom: calc(10px + 150px * var(--ui)); transform-origin: 0 100%; }
+  /* the clock goes under the profile card, left of the Pets tabs */
+  html .night-clock { left: auto; bottom: auto; top: calc(12px + 50px * var(--ui) + 6px); right: calc(22px + 84px * var(--ui)); transform-origin: 100% 0; }
+  /* the free gift and the potions start under the Pets / Weapons tabs (two tabs: 2 x 84 + 8) */
+  html .gift-btn { top: calc(56px + 34px * var(--ui) + 184px * var(--ui) + 8px); }
+  html .boost-bar { top: calc(56px + 34px * var(--ui) + 184px * var(--ui) + 8px + 90px * var(--ui) + 6px); }
+}
+
+/* phones held upright, from the top: profile card (right) with the clock beside it (left),
+   the goal line under them, then the messages */
+@media (pointer: coarse) and (orientation: portrait) {
+  html .night-clock { top: calc(var(--boxity-ui-top, 0px) + 14px); left: 14px; right: auto; transform-origin: 0 0; }
+  html .objective { top: calc(var(--boxity-ui-top, 0px) + 46px); max-width: calc(94vw / var(--ui)); left: 50%; right: auto; margin-inline: 0; transform: none; translate: -50% 0; }
+  /* short phones: the Shop menu and the switches move up so they end above the speed and cash */
+  :root { --menu-top: min(30%, calc(100vh - 48px - 150px * var(--touch) - 540px * var(--ui))); }
+  html .top-stack { top: calc(var(--boxity-ui-top, 0px) + 112px); width: 94vw; }
+}

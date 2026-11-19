@@ -1,0 +1,3 @@
+// Loading screen control.
+
+export {};

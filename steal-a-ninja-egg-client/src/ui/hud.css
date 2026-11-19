@@ -1,0 +1,243 @@
+﻿.hud { position: absolute; inset: 0; pointer-events: none; font-family: 'Fredoka', sans-serif; color: #fff; }
+
+/* the red edges while you carry a stolen egg (under the rest of the HUD: it is the first child) */
+.danger-vignette {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.4s ease;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(200, 10, 30, 0.35) 82%, rgba(150, 0, 20, 0.6) 100%);
+}
+.danger-vignette.on { opacity: 0.7; }
+.danger-vignette.on.chased { animation: danger-pulse 0.6s ease-in-out infinite alternate; }
+@keyframes danger-pulse { from { opacity: 0.8; } to { opacity: 1; } }
+
+.objective {
+  position: absolute; bottom: 200px; left: 50%; transform: translateX(-50%); /* above Auto Swing and the hotbar */
+  display: flex; align-items: center; gap: 14px; padding: 8px 56px; white-space: nowrap;
+  background: linear-gradient(90deg, transparent, rgba(20, 20, 26, 0.68) 16%, rgba(20, 20, 26, 0.68) 84%, transparent);
+  font-size: clamp(18px, 2.9vw, 38px); font-weight: 700; letter-spacing: 0.5px;
+  -webkit-text-stroke: 1.5px #14141a; paint-order: stroke fill;
+}
+
+.prompt { position: absolute; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 8px; text-shadow: 0 2px 3px rgba(0, 0, 0, 0.7); }
+.prompt-key { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 8px; background: rgba(20, 20, 26, 0.86); border: 2px solid #fff; font-weight: 700; font-size: 21px; }
+.prompt-text { display: flex; flex-direction: column; line-height: 1.05; }
+.prompt-text small { font-size: 14px; font-weight: 600; }
+.prompt-text b { font-size: 21px; font-weight: 700; }
+/* hold E to pick up: the key fills from the bottom and a bar fills under the text */
+.prompt-key { position: relative; overflow: hidden; }
+.prompt-key em { position: relative; font-style: normal; }
+.prompt-key-fill { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(#ffe066, #ffb21f); }
+/* the egg pick-up prompt is bigger than the others, so it is easy to see */
+.prompt.hold { gap: 12px; }
+.prompt.hold .prompt-key { width: 58px; height: 58px; border-radius: 11px; border-width: 3px; font-size: 32px; }
+.prompt.hold .prompt-text small { font-size: 20px; }
+.prompt.hold .prompt-text b { font-size: 30px; }
+.prompt.hold .prompt-bar { width: 180px; height: 13px; border-radius: 7px; }
+.prompt-bar { display: block; width: 120px; height: 9px; margin-top: 4px; border-radius: 5px; overflow: hidden; background: rgba(20, 20, 26, 0.86); border: 2px solid #fff; }
+.prompt-bar i { display: block; height: 100%; background: linear-gradient(90deg, #ffe066, #ffb21f); }
+
+.tree-bar { position: absolute; transform: translate(-50%, -100%); width: 216px; text-align: center; }
+.tree-name { font-size: 26px; font-weight: 700; -webkit-text-stroke: 1.2px #14141a; paint-order: stroke fill; }
+.tree-track { position: relative; height: 32px; margin-top: 2px; border-radius: 8px; overflow: hidden; background: #2a2c33; border: 3px solid #14141a; }
+.tree-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(#a8e85c, #6fca2c); transition: width 0.12s; }
+.tree-track span { position: relative; line-height: 26px; font-size: 21px; font-weight: 700; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill; }
+
+/* under the tree's HP bar when it is in reach: auto chop button (or F), or click to chop */
+.chop-prompt { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 6px; }
+.chop-auto {
+  display: grid; grid-template-columns: auto auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center;
+  padding: 6px 14px 6px 8px; border-radius: 10px; border: 3px solid #14141a; cursor: pointer; pointer-events: auto;
+  background: linear-gradient(#ffd85c, #f2a51f); color: #fff; font-family: inherit; text-align: left;
+  box-shadow: 0 3px 0 #14141a; animation: chop-pulse 1.2s ease-in-out infinite;
+}
+.chop-auto.on { background: linear-gradient(#7dff3f, #3fbf2c); animation: none; }
+.chop-auto:active { transform: translateY(2px); box-shadow: 0 1px 0 #14141a; }
+.chop-auto kbd {
+  grid-row: span 2; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 7px;
+  background: rgba(20, 20, 26, 0.86); border: 2px solid #fff; font: 700 20px 'Fredoka', sans-serif;
+}
+.chop-auto span { font-size: 21px; font-weight: 700; line-height: 1; -webkit-text-stroke: 1.2px #14141a; paint-order: stroke fill; }
+.chop-auto small { font-size: 13px; font-weight: 600; line-height: 1.1; -webkit-text-stroke: 0.8px #14141a; paint-order: stroke fill; }
+.chop-click { font-size: 16px; font-weight: 600; text-shadow: 0 2px 3px rgba(0, 0, 0, 0.75); }
+.chop-click b { color: #ffd21f; }
+@keyframes chop-pulse { 50% { transform: scale(1.06); } }
+
+.carry { position: absolute; right: 26%; bottom: 13%; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.carry-count { display: flex; align-items: center; gap: 8px; font-size: 36px; font-weight: 700; -webkit-text-stroke: 1.5px #14141a; paint-order: stroke fill; }
+.carry-drop {
+  position: relative; display: grid; place-items: center; width: 74px; height: 74px; padding: 0; cursor: pointer; pointer-events: auto;
+  background: #d81f4b; border: 3px solid #14141a; border-radius: 10px;
+}
+.carry-drop kbd {
+  position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%);
+  width: 30px; height: 30px; line-height: 28px; border-radius: 6px; background: #1d3b2a; color: #fff; font-family: inherit; font-size: 17px;
+}
+
+.reveal {
+  position: absolute; top: 28%; left: 50%; transform: translateX(-50%); text-align: center;
+  display: flex; flex-direction: column; animation: reveal-in 0.32s cubic-bezier(0.2, 1.5, 0.4, 1);
+  -webkit-text-stroke: 2px #14141a; paint-order: stroke fill; font-weight: 700;
+}
+.reveal small { font-size: 26px; }
+.reveal b { font-size: 76px; line-height: 1.02; }
+.reveal span { font-size: 32px; }
+@keyframes reveal-in { from { transform: translateX(-50%) scale(0.4); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+
+
+.tree-hits { margin-top: 4px; display: flex; flex-direction: column; align-items: center; line-height: 1; font-weight: 700; color: #ffe23a; -webkit-text-stroke: 1.5px #14141a; paint-order: stroke fill; }
+.tree-hits b { font-size: 46px; animation: hit-pop 0.18s ease-out; }
+.tree-hits span { font-size: 16px; color: #ffffff; }
+.tree-hits small { margin-top: 2px; font-size: 15px; color: #ff6a5c; }
+.tree-hits.hard b { color: #ff6a5c; }
+@keyframes hit-pop { from { transform: scale(1.35); } to { transform: scale(1); } }
+.reveal em { font-style: normal; font-size: 34px; color: #7dff3f; }
+
+.stats { position: absolute; left: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 4px; }
+.stat { display: flex; align-items: center; gap: 8px; font-weight: 700; -webkit-text-stroke: 1.5px #14141a; paint-order: stroke fill; }
+.stat > span { font-size: 54px; }
+.stat-icon { position: relative; display: grid; }
+.stat-plus {
+  position: absolute; right: -6px; bottom: -6px; width: 28px; height: 28px; padding: 0; border: 3px solid #14141a; border-radius: 7px;
+  background: linear-gradient(#8cf55a, #3fbf2c); color: #fff; font: 800 24px/18px 'Fredoka', sans-serif; cursor: pointer; pointer-events: auto;
+  -webkit-text-stroke: 1px #14141a; paint-order: stroke fill;
+}
+.stat.cash span { color: #7dff3f; }
+.stat small { font-size: 36px; color: #7dff3f; }
+
+.auto-swing {
+  position: absolute; left: 50%; bottom: 112px; transform: translateX(-50%); pointer-events: auto; cursor: pointer;
+  display: grid; grid-template-columns: auto auto auto; align-items: center; column-gap: 14px; padding: 8px 18px 8px 14px; min-width: 360px; box-shadow: 0 4px 0 #14141a;
+  background: linear-gradient(#ff4d5e, #d7263b); border: 3px solid #14141a; border-radius: 10px; color: #fff; font-family: inherit;
+}
+.auto-swing.on { background: linear-gradient(#8ff05a, #44c22b); }
+.auto-swing svg { grid-row: 1 / span 2; }
+.auto-swing span { font-size: 36px; font-weight: 700; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill; }
+.auto-swing small { grid-column: 2; font-size: 14px; font-weight: 700; }
+.auto-swing kbd { grid-row: 1 / span 2; grid-column: 3; width: 40px; height: 40px; line-height: 38px; font-size: 24px; border-radius: 6px; background: #1b1c22; font-family: inherit; text-align: center; }
+
+.run-banner {
+  position: absolute; top: 22%; left: 50%; transform: translateX(-50%); padding: 4px 34px; border-radius: 12px;
+  background: #e8173e; border: 4px solid #fff; font-size: 54px; font-weight: 700; letter-spacing: 2px;
+  -webkit-text-stroke: 2px #14141a; paint-order: stroke fill; animation: run-pulse 0.45s ease-in-out infinite alternate;
+}
+@keyframes run-pulse { from { transform: translateX(-50%) scale(1); } to { transform: translateX(-50%) scale(1.08); } }
+
+/* entering a forest: its name and difficulty face, and the recommended speed */
+.zone-banner {
+  position: absolute; top: 2%; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 60px 12px; background: linear-gradient(90deg, transparent, rgba(20, 22, 30, 0.55) 18%, rgba(20, 22, 30, 0.55) 82%, transparent);
+  font-weight: 800; -webkit-text-stroke: 2.5px #14141a; paint-order: stroke fill; white-space: nowrap;
+  animation: slide-in 0.35s ease-out, fade-out 0.5s ease-in 3.4s forwards;
+}
+.zone-title { display: flex; align-items: center; gap: 16px; }
+.zone-title b { font-size: 92px; line-height: 1; color: var(--zc); font-style: italic; -webkit-text-stroke: 4px #14141a; }
+.zone-rec { display: flex; align-items: center; gap: 10px; }
+.zone-rec span { font-size: 54px; color: #fff; }
+.zone-rec svg { width: 64px; height: 64px; }
+.zone-rec em { font-style: normal; font-size: 54px; color: #35d0ff; }
+@keyframes slide-in { from { transform: translate(-50%, -20px); } to { transform: translate(-50%, 0); } }
+@keyframes fade-out { to { opacity: 0; } }
+
+.toast {
+  position: absolute; top: 34%; left: 50%; transform: translateX(-50%); font-size: 40px; font-weight: 700; white-space: nowrap;
+  -webkit-text-stroke: 2px #14141a; paint-order: stroke fill; animation: slide-in 0.3s ease-out, fade-out 0.4s ease-in 1.5s forwards;
+}
+
+.shop-backdrop { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.35); pointer-events: auto; }
+.shop { width: min(760px, 94vw); border: 4px solid #14141a; border-radius: 14px; overflow: hidden; background: #2a1b3d; box-shadow: 0 16px 40px rgba(0,0,0,0.5); }
+.shop-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; background: linear-gradient(#b05cff, #7b2fd6); }
+.shop-head h2 { margin: 0; font-size: 32px; -webkit-text-stroke: 1.5px #14141a; paint-order: stroke fill; }
+.shop-close { width: 40px; height: 40px; border-radius: 8px; border: 3px solid #14141a; background: #e8173e; color: #fff; font: 700 22px 'Fredoka', sans-serif; cursor: pointer; }
+.shop-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; padding: 14px; }
+.shop-card { display: flex; flex-direction: column; align-items: center; padding: 8px; border-radius: 10px; background: linear-gradient(#f4f4f6, #d9dbe0); border: 3px solid #14141a; color: #14141a; }
+.shop-card-name { font-size: 17px; font-weight: 700; }
+.shop-card-rarity { font-size: 13px; font-weight: 700; -webkit-text-stroke: 0.6px #14141a; }
+.shop-card-power { width: 100%; margin: 4px 0; padding: 2px 0; border-radius: 6px; background: #3b3f48; color: #fff; text-align: center; font-weight: 700; font-size: 15px; }
+.shop-btn { width: 100%; padding: 6px 0; border-radius: 8px; border: 3px solid #14141a; font: 700 17px 'Fredoka', sans-serif; color: #fff; cursor: pointer; -webkit-text-stroke: 0.8px #14141a; paint-order: stroke fill; }
+.shop-btn.buy { background: linear-gradient(#8ff05a, #44c22b); }
+.shop-btn.buy.poor { background: linear-gradient(#9aa0a8, #6d737b); cursor: not-allowed; }
+.shop-btn.equip { background: linear-gradient(#5cc8ff, #2b8fe2); }
+.shop-btn.equipped { background: linear-gradient(#c9ced6, #9aa0a8); cursor: default; }
+
+.perf { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; padding: 4px 10px; border-radius: 8px;
+  background: rgba(16, 18, 26, 0.6); font-size: 13px; font-weight: 600; color: #dfe6ee; }
+.perf b { color: #7dff3f; }
+.perf-fair b { color: #ffd21f; }
+.perf-poor b { color: #ff6a5c; }
+
+/* the owned axes along the bottom; click or press 1-9 */
+.hotbar { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; gap: 8px; pointer-events: auto; }
+.hot-slot {
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; width: 84px; height: 88px; padding: 2px;
+  border: 3px solid #14141a; border-radius: 10px; background: rgba(40, 42, 50, 0.85); color: #fff; cursor: pointer; font-family: inherit;
+}
+.hot-slot.on { background: linear-gradient(#ffe066, #f2a51f); outline: 3px solid #fff; }
+.hot-slot i { position: absolute; left: 5px; top: 1px; font-style: normal; font-size: 16px; font-weight: 800; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill; }
+.hot-slot span { font-size: 12px; font-weight: 800; white-space: nowrap; -webkit-text-stroke: 0.8px #14141a; paint-order: stroke fill; }
+
+/* slow mode: walk at half speed */
+.slow-mode {
+  position: absolute; left: 14px; top: calc(36% + 214px); display: flex; align-items: center; gap: 10px; padding: 0;
+  border: none; background: none; color: #fff; cursor: pointer; pointer-events: auto; font-family: inherit;
+}
+.slow-mode i { width: 74px; height: 40px; border: 3px solid #14141a; border-radius: 8px; background: linear-gradient(90deg, #e8293c 50%, #3a7a2a 50%); }
+.slow-mode.on i { background: linear-gradient(90deg, #3a3d45 50%, #5ff04a 50%); }
+.slow-mode span { font-size: 24px; font-weight: 800; -webkit-text-stroke: 1.2px #14141a; paint-order: stroke fill; }
+
+/* top right: the player's name, picture, sound and Gems (never top-left: Boxity's toolbar is there) */
+.profile-card {
+  position: absolute; top: 12px; right: 12px; display: flex; align-items: center; gap: 10px; padding: 5px 16px 5px 5px;
+  border-radius: 30px; background: rgba(28, 30, 36, 0.86); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); pointer-events: auto;
+}
+.profile-pfp { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: #3a3d45; }
+.profile-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 22px; font-weight: 800; font-style: italic; color: #fff; }
+.profile-sound { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: none; border-radius: 50%; background: transparent; cursor: pointer; }
+.profile-sound:hover { background: rgba(255, 255, 255, 0.1); }
+.profile-split { width: 2px; height: 26px; background: rgba(255, 255, 255, 0.18); }
+.profile-gems { min-width: 18px; font-size: 21px; font-weight: 800; font-style: italic; color: #fff; }
+@media (max-width: 640px) {
+  .profile-card { top: calc(var(--boxity-ui-top, 0px) + 6px); }
+  .profile-name { max-width: 120px; font-size: 17px; }
+}
+
+
+/* ---------------------------------------------------------------- Steal a Ninja Egg */
+/* the goal line sits at the top in big white letters, like the video ("Steal an Egg!") */
+.objective { top: 14px; bottom: auto; background: none; padding: 4px 24px; font-size: clamp(20px, 3vw, 40px); }
+.top-stack { top: 74px; }
+.perf { bottom: 70px; }
+
+.night-clock {
+  position: absolute; right: 14px; bottom: 12px; display: flex; align-items: center; gap: 8px;
+  font-size: clamp(20px, 2.4vw, 32px); font-weight: 800; font-style: italic; -webkit-text-stroke: 1.5px #14141a; paint-order: stroke fill;
+}
+.night-clock.night b { color: #c89bff; }
+
+.announce {
+  padding: 6px 18px; border-radius: 10px; font-size: clamp(16px, 2vw, 26px); font-weight: 800; white-space: nowrap;
+  -webkit-text-stroke: 1.2px #14141a; paint-order: stroke fill; animation: announce-in 0.4s ease-out;
+}
+.announce.big { font-size: clamp(28px, 5vw, 64px); font-family: 'Luckiest Guy', 'Fredoka', sans-serif; -webkit-text-stroke: 2px #14141a; }
+@keyframes announce-in { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+.run-banner { background: linear-gradient(#ff4a5a, #d81f33); border: 3px solid #fff; border-radius: 12px; padding: 2px 34px; }
+
+.toggles { position: absolute; left: 14px; bottom: 150px; display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }
+.toggle { display: flex; align-items: center; gap: 8px; background: none; border: 0; color: #fff; font-family: inherit; cursor: pointer; padding: 0; }
+.toggle i { width: 44px; height: 24px; border: 2px solid #14141a; border-radius: 6px; background: linear-gradient(90deg, #3a3d45 50%, #2e7a2a 50%); }
+.toggle.on i { background: linear-gradient(90deg, #3a3d45 50%, #5ff04a 50%); }
+.toggle span { font-size: 18px; font-weight: 700; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill; }
+.slow-mode, .auto-swing, .tree-bar { display: none; }
+
+.drop-btn {
+  position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+  padding: 8px 22px; border-radius: 12px; border: 3px solid #fff; background: linear-gradient(#ff5a6e, #d81f3f); color: #fff;
+  font-family: inherit; font-size: 26px; font-weight: 800; pointer-events: auto; cursor: pointer; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill;
+}
+.drop-btn kbd { font-family: inherit; font-size: 16px; background: rgba(0, 0, 0, 0.35); padding: 0 6px; border-radius: 5px; }
+
+.mill-bar { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); width: min(460px, 80vw); text-align: center; }
+.mill-hint { font-size: clamp(16px, 2vw, 24px); font-weight: 700; color: #7fe8ff; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill; }
+.mill-row { display: flex; justify-content: space-between; font-size: 18px; font-weight: 800; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill; }
+.mill-track { height: 14px; border-radius: 8px; border: 2px solid #14141a; background: rgba(20, 20, 26, 0.7); overflow: hidden; }
+.mill-track i { display: block; height: 100%; background: linear-gradient(90deg, #35b8ff, #7fe8ff); }
+.mill-mult { margin-top: 2px; font-size: 18px; font-weight: 800; color: #ffd21f; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill; }
