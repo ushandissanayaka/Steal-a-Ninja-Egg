@@ -1,4 +1,4 @@
-// Market stalls, the fusion machine and the three leaderboards.
+// Market stalls, the free gift, the fusion machine, the leaderboards and the events board.
 
 import * as THREE from 'three';
 import { canvasTexture, drawOutlinedText, makeBillboard, FONT_UI } from '../util/canvasText.js';
@@ -79,8 +79,10 @@ function addBulbs(scene, points, colors) {
 }
 
 // Every shop returns an update(time) that animates its shine.
-export function addStall(scene, v, physics, { x, z, name, color, fill }) {
-  const floor = new THREE.Mesh(new THREE.CircleGeometry(9.5 * S, 40), new THREE.MeshLambertMaterial({ color }));
+// stripe = the awning's second colour (white by default), floor = the floor disc's colour,
+// lines = the label (instead of just the name), bulbs = false for a plain stall.
+export function addStall(scene, v, physics, { x, z, name, color, fill, stripe = '#ffffff', floor: floorColor = color, lines = null, bulbs: withBulbs = true }) {
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(9.5 * S, 40), new THREE.MeshLambertMaterial({ color: floorColor }));
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(x, 0.12, z);
   scene.add(floor);
@@ -94,11 +96,15 @@ export function addStall(scene, v, physics, { x, z, name, color, fill }) {
   const width = 12.6 * S;
   for (let i = 0; i < stripes; i++) {
     const sx = x - width / 2 + ((i + 0.5) / stripes) * width;
-    v.box(sx, 8 * S, z, width / stripes, 0.9 * S, 10 * S, i % 2 ? '#ffffff' : color, { rx: 0.1 });
+    v.box(sx, 8 * S, z, width / stripes, 0.9 * S, 10 * S, i % 2 ? stripe : color, { rx: 0.1 });
   }
+  // the counter between the front posts
+  v.box(x, 0, z + postZ - 0.4 * S, 10 * S, 3.2 * S, 1.6 * S, '#c07a36');
+  v.box(x, 3.2 * S, z + postZ - 0.4 * S, 10.8 * S, 0.5 * S, 2.2 * S, WOOD);
 
-  const label = makeBillboard([{ text: name, size: 78, fill }], 3.5 * S);
-  label.position.set(x, 12.6 * S, z);
+  const labelLines = lines || [{ text: name, size: 78, fill }];
+  const label = makeBillboard(labelLines, 3.5 * S * (labelLines.length > 1 ? 1.7 : 1));
+  label.position.set(x, (labelLines.length > 1 ? 13.8 : 12.6) * S, z);
   scene.add(label);
   const half = 0.6 * S;
   for (const sx of [-postX, postX]) for (const sz of [-postZ, postZ]) physics.addBox(x + sx - half, x + sx + half, z + sz - half, z + sz + half);
@@ -111,8 +117,42 @@ export function addStall(scene, v, physics, { x, z, name, color, fill }) {
     }
   }
   const ring = addGlowRing(scene, x, z, 9.5 * S, fill);
-  const bulbs = addBulbs(scene, bulbPoints, ['#fff4b8', fill]);
-  return (time) => { ring(time); bulbs(time); };
+  const bulbs = withBulbs ? addBulbs(scene, bulbPoints, ['#fff4b8', fill]) : null;
+  return (time) => { ring(time); bulbs?.(time); };
+}
+
+// The free gift (like the video): a big red present with a yellow ribbon and bow, bobbing on a
+// glowing yellow pad, with a huge "FREE!" over it. Stepping on the pad claims the gift.
+export function addGiftPad(scene, x, z) {
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(5.6 * S, 32), new THREE.MeshLambertMaterial({ color: '#ffe066' }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(x, 0.12, z);
+  scene.add(floor);
+  const label = makeBillboard([{ text: 'FREE!', size: 110, fill: '#b6ff2a', stroke: '#1a2a06', font: '"Luckiest Guy", sans-serif', weight: 400 }], 4.4 * S);
+  label.position.set(x, 10 * S, z);
+  scene.add(label);
+
+  const v = new Voxels();
+  const RED = '#e3162a', RED_DARK = '#b80f20', GOLD = '#ffd21f';
+  const w = 7, h = 6;
+  v.box(0, 0, 0, w, h, w, RED);
+  v.box(0, h - 0.2, 0, w + 0.8, 1.6, w + 0.8, RED_DARK); // the lid
+  for (const ry of [0, Math.PI / 2]) v.box(0, -0.05, 0, 1.4, h + 1.7, w + 0.95, GOLD, { ry }); // the ribbon round it
+  // the bow: two loops and a knot
+  for (const s of [-1, 1]) v.box(s * 1.5, h + 1.6, 0, 2.4, 1.8, 1.2, GOLD, { rz: s * 0.5 });
+  v.box(0, h + 1.4, 0, 1.4, 1.4, 1.4, '#ffb800');
+  const gift = v.mesh();
+  gift.scale.setScalar(S * 0.85);
+  const group = new THREE.Group();
+  group.add(gift);
+  group.position.set(x, 0.4, z);
+  scene.add(group);
+  const ring = addGlowRing(scene, x, z, 5.6 * S, '#ffe33a');
+  return (time) => {
+    ring(time);
+    group.rotation.y = Math.sin(time * 0.8) * 0.35;
+    group.position.y = 0.4 + Math.abs(Math.sin(time * 2.2)) * 0.9;
+  };
 }
 
 export function addFreePad(scene, x, z) {
@@ -297,4 +337,122 @@ export function addLeaderboards(scene, v, boards, wallX) {
     scene.add(glow);
     return uniforms;
   });
+}
+
+// ------------------------------------------------------------------ arched leaderboards
+
+function archShape(halfW, straight, radius) {
+  const shape = new THREE.Shape();
+  shape.moveTo(-halfW, 0);
+  shape.lineTo(halfW, 0);
+  shape.lineTo(halfW, straight);
+  shape.absarc(0, straight, radius, 0, Math.PI, false);
+  shape.lineTo(-halfW, 0);
+  return shape;
+}
+
+function archBoardTexture(title, color) {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 640;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0f1a52';
+  g.fillRect(0, 0, c.width, c.height);
+  drawOutlinedText(g, title, c.width / 2, 46, { size: 48, fill: '#ffffff', stroke: color, strokeWidth: 8, font: FONT_UI });
+  const rows = 9, top = 96, rowH = (c.height - top - 16) / rows;
+  const medals = ['#ffd24a', '#dfe5ec', '#f09a55'];
+  for (let i = 0; i < rows; i++) {
+    const y = top + i * rowH;
+    g.fillStyle = i % 2 ? '#1b2a78' : '#16236a';
+    g.fillRect(16, y, c.width - 32, rowH - 6);
+    g.fillStyle = '#2a3c9a';
+    g.fillRect(28, y + 6, rowH - 18, rowH - 18); // the avatar square
+    drawOutlinedText(g, '#' + (i + 1), 28 + (rowH - 18) / 2, y + (rowH - 6) / 2, { size: 26, fill: medals[i] || '#c8d0ff', stroke: '#000000', strokeWidth: 3, font: FONT_UI });
+    g.fillStyle = 'rgba(255,255,255,0.22)';
+    g.fillRect(28 + rowH, y + rowH * 0.32, 200, 10);
+    g.fillRect(c.width - 130, y + rowH * 0.32, 90, 10);
+  }
+  return canvasTexture(c);
+}
+
+// The three arched leaderboards on the north wall (green, blue, pink, like the video): a thick
+// coloured arch frame round a dark blue board with the list. boards: [{ x, title, color, dark }].
+// They stand against the wall (inner face at wallZ) and face +Z, into the lobby.
+export function addArchBoards(scene, physics, boards, wallZ) {
+  const W = 26, STRAIGHT = 30, R = W / 2, FRAME_T = 3, DEPTH = 3;
+  const studGeometry = new THREE.CylinderGeometry(0.7, 0.7, 0.6, 10).rotateX(Math.PI / 2);
+  for (const { x, title, color, dark } of boards) {
+    const group = new THREE.Group();
+    group.position.set(x, 0, wallZ);
+    scene.add(group);
+    const outer = archShape(W / 2 + FRAME_T, STRAIGHT, R + FRAME_T);
+    outer.holes.push(archShape(W / 2, STRAIGHT, R));
+    const frame = new THREE.Mesh(
+      new THREE.ExtrudeGeometry(outer, { depth: DEPTH, bevelEnabled: true, bevelThickness: 0.5, bevelSize: 0.5, bevelSegments: 1, curveSegments: 24 }),
+      new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.25 }),
+    );
+    frame.castShadow = true;
+    group.add(frame);
+    const back = new THREE.Mesh(
+      new THREE.ExtrudeGeometry(archShape(W / 2, STRAIGHT, R), { depth: DEPTH * 0.5, bevelEnabled: false, curveSegments: 24 }),
+      new THREE.MeshLambertMaterial({ color: dark }),
+    );
+    group.add(back);
+    // the list on the straight part
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(W - 2, STRAIGHT + 2), new THREE.MeshBasicMaterial({ map: archBoardTexture(title, dark) }));
+    face.position.set(0, (STRAIGHT + 2) / 2 + 1, DEPTH * 0.5 + 0.05);
+    group.add(face);
+    // a ring of white studs along the arch
+    const studMaterial = new THREE.MeshLambertMaterial({ color: '#ffffff', emissive: color, emissiveIntensity: 0.4 });
+    for (let i = 0; i <= 10; i++) {
+      const a = (i / 10) * Math.PI;
+      const stud = new THREE.Mesh(studGeometry, studMaterial);
+      stud.position.set(Math.cos(a) * (R + FRAME_T / 2), STRAIGHT + Math.sin(a) * (R + FRAME_T / 2), DEPTH + 0.8);
+      group.add(stud);
+    }
+    physics.addBox(x - W / 2 - FRAME_T, x + W / 2 + FRAME_T, wallZ - 1, wallZ + DEPTH + 1);
+  }
+}
+
+// The events board (the video's red "ADMIN ABUSE" board): a red board in a chunky wooden frame on
+// two legs, turned by ry. lines = the text on it.
+export function addEventsBoard(scene, physics, { x, z, ry, lines }) {
+  const W = 34, H = 20, BOTTOM = 7;
+  const group = new THREE.Group();
+  group.position.set(x, 0, z);
+  group.rotation.y = ry;
+  scene.add(group);
+  const b = new Voxels();
+  const WOOD_DARK = '#6e3a1e', WOOD_MID = '#8a4b2b';
+  for (const s of [-1, 1]) {
+    b.box(s * (W / 2 + 1), 0, 0, 2.6, BOTTOM + H + 3, 2.6, WOOD_DARK);
+    b.box(s * (W / 2 + 1), BOTTOM + H + 3, 0, 3.4, 1.2, 3.4, WOOD_MID);
+  }
+  b.box(0, BOTTOM - 1.6, 0, W + 4, 1.8, 2.2, WOOD_MID);
+  b.box(0, BOTTOM + H, 0, W + 4, 1.8, 2.2, WOOD_MID);
+  b.box(0, BOTTOM, -0.2, W, H, 1.2, '#c8121c');
+  group.add(b.mesh());
+  const text = textBoard(lines, W - 3, H - 3);
+  text.position.set(0, BOTTOM + H / 2, 0.45);
+  group.add(text);
+  for (const s of [-1, 1]) {
+    const lx = s * (W / 2 + 1);
+    physics.addCircle(x + lx * Math.cos(ry), z - lx * Math.sin(ry), 2);
+  }
+}
+
+// Text lines fitted onto a w x h plane.
+function textBoard(lines, w, h) {
+  const c = document.createElement('canvas');
+  c.width = 1024;
+  c.height = Math.round((1024 * h) / w);
+  const g = c.getContext('2d');
+  const total = lines.reduce((sum, l) => sum + l.size * 1.25, 0);
+  let y = (c.height - total) / 2;
+  for (const l of lines) {
+    y += (l.size * 1.25) / 2;
+    drawOutlinedText(g, l.text, c.width / 2, y, { strokeWidth: l.size * 0.16, stroke: '#3a0006', font: FONT_UI, ...l });
+    y += (l.size * 1.25) / 2;
+  }
+  return new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: canvasTexture(c), transparent: true, depthWrite: false }));
 }

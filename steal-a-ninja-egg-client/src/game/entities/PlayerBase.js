@@ -1,7 +1,7 @@
-// A player's pen (like the video): a fenced rectangle of orange rails on dark posts with an open
-// gate facing the middle of the lobby. Inside: straw nests where stolen eggs grow (a timer over
+// A player's plot (like the video): a fenced rectangle of brown wooden ranch fence (two chunky
+// rails on square posts, a kick board along the ground) with an open gate facing the dojo. Inside: straw nests where stolen eggs grow (a timer over
 // each, "Hold E!" when ready) and the hatched pets wandering about. Outside, beside the gate: the
-// treadmill and its Unlock / Upgrade board. An unowned pen says "Empty Base".
+// treadmill and its Unlock / Upgrade board. An unowned plot says "Empty Plot".
 
 import * as THREE from 'three';
 import { Voxels } from '../util/bake.js';
@@ -15,10 +15,11 @@ import { createGlow } from './Effects.js';
 
 const OWNER_SIGN_HEIGHT = 10; // the owner's board, a little wider than the treadmill frame it stands on
 
-const RAIL = '#e0892f';
-const RAIL_DARK = '#b8641f';
-const POST = '#2c3448';
-const POST_CAP = '#46506a';
+const RAIL = '#8a4b2b';
+const RAIL_DARK = '#6e3a20';
+const POST = '#5e311a';
+const POST_CAP = '#7a4326';
+const KICK = '#b8723c';     // the lighter plank along the bottom
 const STRAW = ['#e8c25a', '#d6a83e'];
 const EGG_GROW_FROM = 0.9;  // just put down...
 const EGG_GROW_TO = 2.4;    // ...ready to hatch: well over twice as big
@@ -31,32 +32,23 @@ const clockText = (ms) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-// One side of the fence: two crossed rails between dark posts (the video's ranch fence).
+// One side of the fence: two chunky brown rails between square posts, a light kick board along
+// the ground (the video's wooden ranch fence).
 function addFence(v, ax, az, bx, bz, colliders) {
   const horizontal = az === bz;
   const length = horizontal ? Math.abs(bx - ax) : Math.abs(bz - az);
   const cx = (ax + bx) / 2, cz = (az + bz) / 2;
-  const rail = (y, h, color, tilt = 0) => v.box(cx, y, cz, horizontal ? length : 0.7, h, horizontal ? 0.7 : length, color,
-    tilt ? (horizontal ? { rz: tilt } : { rx: tilt }) : undefined);
-  rail(1.6, 0.9, RAIL);
-  rail(3.6, 0.9, RAIL);
-  rail(0, 0.4, RAIL_DARK);
-  const posts = Math.max(1, Math.round(length / 9));
+  const rail = (y, h, t, color) => v.box(cx, y, cz, horizontal ? length : t, h, horizontal ? t : length, color);
+  rail(0, 0.5, 1.6, KICK);
+  rail(1.5, 1.0, 0.8, RAIL);
+  rail(3.3, 1.0, 0.8, RAIL);
+  rail(3.3, 0.25, 0.9, RAIL_DARK); // a darker edge under the top rail
+  const posts = Math.max(1, Math.round(length / 14));
   for (let i = 0; i <= posts; i++) {
     const k = i / posts;
     const px = ax + (bx - ax) * k, pz = az + (bz - az) * k;
-    v.box(px, 0, pz, 1.4, 5.2, 1.4, POST);
-    v.box(px, 5.2, pz, 1.8, 0.5, 1.8, POST_CAP);
-    // the X brace between this post and the next
-    if (i < posts) {
-      const nx = ax + (bx - ax) * ((i + 1) / posts), nz = az + (bz - az) * ((i + 1) / posts);
-      const seg = horizontal ? Math.abs(nx - px) : Math.abs(nz - pz);
-      const angle = Math.atan2(2.4, seg);
-      for (const s of [-1, 1]) {
-        v.box((px + nx) / 2, 1.6, (pz + nz) / 2, horizontal ? Math.hypot(seg, 2.4) : 0.5, 0.5, horizontal ? 0.5 : Math.hypot(seg, 2.4), RAIL_DARK,
-          horizontal ? { rz: s * angle } : { rx: s * angle });
-      }
-    }
+    v.box(px, 0, pz, 1.5, 4.8, 1.5, POST);
+    v.box(px, 4.8, pz, 1.8, 0.4, 1.8, POST_CAP);
   }
   colliders.push([Math.min(ax, bx) - 0.7, Math.max(ax, bx) + 0.7, Math.min(az, bz) - 0.7, Math.max(az, bz) + 0.7, 5]);
 }
@@ -84,7 +76,7 @@ export class PlotView {
     this.effects = effects;
     this.group = new THREE.Group();
     this.group.position.set(plot.x, 0, plot.z);
-    this.group.rotation.y = plot.dir === 1 ? 0 : Math.PI;
+    this.group.rotation.y = plot.rot;
     this.group.scale.setScalar(PLOT_SCALE);
     scene.add(this.group);
 
@@ -118,7 +110,7 @@ export class PlotView {
     boxes.push([tx - TREADMILL_HALF.x, tx + TREADMILL_HALF.x, tz - TREADMILL_HALF.z, tz - TREADMILL_BELT.backZ, 6]);
     const beltA = plotToWorld(this.plot, tx - TREADMILL_BELT.halfX, tz - TREADMILL_BELT.backZ);
     const beltB = plotToWorld(this.plot, tx + TREADMILL_BELT.halfX, tz + TREADMILL_BELT.frontZ);
-    physics.addSurface(beltA.x, beltB.x, beltA.z, beltB.z, TREADMILL_BELT.height * PLOT_SCALE, this.plot.dir === 1 ? Math.PI : 0);
+    physics.addSurface(beltA.x, beltB.x, beltA.z, beltB.z, TREADMILL_BELT.height * PLOT_SCALE, this.plot.rot + Math.PI);
     // the treadmill's frame posts
     for (const side of [-1, 1]) boxes.push([tx + side * FRAME_POST_X - 1.3, tx + side * FRAME_POST_X + 1.3, tz + FRAME_Z - 1.3, tz + FRAME_Z + 1.3, Infinity]);
     const s = PLOT.treadmillSign;
@@ -176,7 +168,7 @@ export class PlotView {
       this.pens.sync(state ? parse(state.pets) : []);
     }
     if (!state) this.pens.clear();
-    this.billboard('empty', state ? '' : 'empty', state ? null : [{ text: 'Empty Base', size: 80, fill: '#ffffff' }], 5,
+    this.billboard('empty', state ? '' : 'empty', state ? null : [{ text: 'Empty Plot', size: 80, fill: '#ffffff' }], 5,
       (PLOT.penMinX + PLOT.penMaxX) / 2, 9, 0);
 
     const penJson = state?.pen || '[]';
