@@ -1,13 +1,17 @@
 // A player's plot (like the video): a fenced rectangle of brown wooden ranch fence (two chunky
-// rails on square posts, a kick board along the ground) with an open gate facing the dojo. Inside: straw nests where stolen eggs grow (a timer over
+// rails on square posts, a kick board along the ground) with an open gate facing the dojo. Inside: the stolen eggs growing right on the grass (a timer over
 // each, "Hold E!" when ready) and the hatched pets wandering about. Outside, beside the gate: the
-// treadmill and its Unlock / Upgrade board. An unowned plot says "Empty Plot".
+// round training arena with its "Upgrade Arena" board, and on the other side of the gate the
+// "Upgrade Pen" board (more egg slots). An unowned plot says "Empty Plot".
 
 import * as THREE from 'three';
 import { Voxels } from '../util/bake.js';
-import { makeBillboard, makeTextPlane } from '../util/canvasText.js';
-import { EGG_SIZES, TREADMILLS, PLOT, PLOT_SCALE, RARITY_COLOR, RULES, eggName, formatNumber, nextTreadmill, plotToWorld, treadmillById } from '../../shared/gameData.js';
-import { FRAME_HEIGHT, FRAME_POST_X, FRAME_Z, TREADMILL_BELT, TREADMILL_HALF, TreadmillView } from './Treadmill.js';
+import { canvasTexture, drawOutlinedText, FONT_TITLE, FONT_UI, makeBillboard } from '../util/canvasText.js';
+import {
+  ARENA, EGG_SIZES, penSlotOf, MAX_PEN_LEVEL, PLOT, PLOT_SCALE, RARITY_COLOR, RULES, eggName, formatNumber, nextPenLevel, nextTreadmill, plotToWorld, treadmillById,
+} from '../../shared/gameData.js';
+import { ARENA_BLOCK, TreadmillView, arenaColor, arenaWallBlocks } from './Treadmill.js';
+import { PEN_RISE, buildPenFrame, fenceSides, stageFloors } from './PenFrame.js';
 import { createEgg } from './Egg.js';
 import { PetPen } from './PetDisplay.js';
 import { OwnerSign } from './OwnerSign.js';
@@ -15,12 +19,6 @@ import { createGlow } from './Effects.js';
 
 const OWNER_SIGN_HEIGHT = 10; // the owner's board, a little wider than the treadmill frame it stands on
 
-const RAIL = '#8a4b2b';
-const RAIL_DARK = '#6e3a20';
-const POST = '#5e311a';
-const POST_CAP = '#7a4326';
-const KICK = '#b8723c';     // the lighter plank along the bottom
-const STRAW = ['#e8c25a', '#d6a83e'];
 const EGG_GROW_FROM = 0.9;  // just put down...
 const EGG_GROW_TO = 2.4;    // ...ready to hatch: well over twice as big
 
@@ -32,41 +30,62 @@ const clockText = (ms) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-// One side of the fence: two chunky brown rails between square posts, a light kick board along
-// the ground (the video's wooden ranch fence).
-function addFence(v, ax, az, bx, bz, colliders) {
-  const horizontal = az === bz;
-  const length = horizontal ? Math.abs(bx - ax) : Math.abs(bz - az);
-  const cx = (ax + bx) / 2, cz = (az + bz) / 2;
-  const rail = (y, h, t, color) => v.box(cx, y, cz, horizontal ? length : t, h, horizontal ? t : length, color);
-  rail(0, 0.5, 1.6, KICK);
-  rail(1.5, 1.0, 0.8, RAIL);
-  rail(3.3, 1.0, 0.8, RAIL);
-  rail(3.3, 0.25, 0.9, RAIL_DARK); // a darker edge under the top rail
-  const posts = Math.max(1, Math.round(length / 14));
-  for (let i = 0; i <= posts; i++) {
-    const k = i / posts;
-    const px = ax + (bx - ax) * k, pz = az + (bz - az) * k;
-    v.box(px, 0, pz, 1.5, 4.8, 1.5, POST);
-    v.box(px, 4.8, pz, 1.8, 0.4, 1.8, POST_CAP);
-  }
-  colliders.push([Math.min(ax, bx) - 0.7, Math.max(ax, bx) + 0.7, Math.min(az, bz) - 0.7, Math.max(az, bz) + 0.7, 5]);
-}
-
-// A round straw nest where an egg sits while it grows.
-function addStrawNest(v, x, z) {
-  for (let i = 0; i < 10; i++) {
-    const a = (i / 10) * Math.PI * 2;
-    v.box(x + Math.cos(a) * 2.6, 0, z + Math.sin(a) * 2.6, 1.6, 0.9, 1, STRAW[i % 2], { ry: -a });
-  }
-  v.box(x, 0, z, 4, 0.35, 4, STRAW[1]);
-}
-
-// The board on two legs beside the treadmill: "Unlock: $1K" / "Upgrade $9K".
+// A navy board on a thick dark post, facing the lobby (+x): "Upgrade Arena" / "Upgrade Pen".
+const BOARD = { w: 9, h: 5.2, y: 3.6 };
 function addSignBoard(v, x, z) {
-  for (const s of [-1, 1]) v.box(x, 0, z + s * 3, 0.7, 5, 0.7, POST);
-  v.box(x, 4.4, z, 0.8, 4.4, 8.6, '#1f3fa8');
-  v.box(x, 4.2, z, 0.6, 4.8, 9, '#14275e');
+  v.box(x - 0.3, 0, z, 1.1, BOARD.y + 1, 1.1, '#1a1f3a');
+  v.box(x - 0.3, 0, z, 2.2, 0.5, 2.2, '#14182e');
+  v.box(x, BOARD.y, z, 0.7, BOARD.h + 0.4, BOARD.w + 0.4, '#101430');
+}
+
+// The board's face: a title, a line under it and a green cash button with the price (like the video).
+const BOARD_PX = 96; // canvas pixels per plot unit
+function drawBoard({ title, line, lineColor = '#9fe7ff', price, done }) {
+  const c = document.createElement('canvas');
+  c.width = BOARD.w * BOARD_PX;
+  c.height = BOARD.h * BOARD_PX;
+  const g = c.getContext('2d');
+  const W = c.width, Hh = c.height;
+  const grad = g.createLinearGradient(0, 0, 0, Hh);
+  grad.addColorStop(0, '#24306e');
+  grad.addColorStop(1, '#141a46');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, W, Hh);
+  g.strokeStyle = '#3a4a9a';
+  g.lineWidth = 10;
+  g.strokeRect(10, 10, W - 20, Hh - 20);
+  drawOutlinedText(g, title, W / 2, Hh * 0.2, { size: 92, fill: '#ffffff', stroke: '#0a0c20', strokeWidth: 12, font: FONT_TITLE, weight: 400, glow: false });
+  drawOutlinedText(g, line, W / 2, Hh * 0.42, { size: 56, fill: lineColor, stroke: '#0a0c20', strokeWidth: 9, font: FONT_UI, weight: 800, glow: false });
+  // the button
+  const bw = W * 0.62, bh = Hh * 0.3, bx = (W - bw) / 2, by = Hh * 0.58;
+  g.fillStyle = done ? '#ffb21f' : '#2fbf3a';
+  g.beginPath();
+  g.roundRect(bx, by, bw, bh, 26);
+  g.fill();
+  g.fillStyle = 'rgba(255,255,255,0.28)';
+  g.beginPath();
+  g.roundRect(bx + 8, by + 6, bw - 16, bh * 0.38, 20);
+  g.fill();
+  g.strokeStyle = done ? '#7a4a00' : '#145a1a';
+  g.lineWidth = 8;
+  g.beginPath();
+  g.roundRect(bx, by, bw, bh, 26);
+  g.stroke();
+  drawOutlinedText(g, done ? 'MAX' : `💵 $${formatNumber(price)}`, W / 2, by + bh / 2 + 4, { size: 84, fill: '#ffffff', stroke: '#0a2a0c', strokeWidth: 12, font: FONT_TITLE, weight: 400, glow: false });
+  return c;
+}
+
+// The green button on a board face, in its UV space (see drawBoard: 62% wide, from 58% to 88% down).
+const BUTTON_UV = { u0: 0.19, u1: 0.81, v0: 0.12, v1: 0.42 };
+export const onBoardButton = (uv) => uv && uv.x >= BUTTON_UV.u0 && uv.x <= BUTTON_UV.u1 && uv.y >= BUTTON_UV.v0 && uv.y <= BUTTON_UV.v1;
+
+function boardMesh(canvas, x, z, buy = null) {
+  const tex = canvasTexture(canvas);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(BOARD.w, BOARD.h), new THREE.MeshBasicMaterial({ map: tex }));
+  mesh.position.set(x + 0.37, BOARD.y + 0.2 + BOARD.h / 2, z);
+  mesh.rotation.y = Math.PI / 2; // facing the lobby
+  mesh.userData.buy = buy; // the message its green button sends (see Game's click)
+  return mesh;
 }
 
 export class PlotView {
@@ -84,37 +103,45 @@ export class PlotView {
     this.treadmill = new TreadmillView(this.group, PLOT.treadmill.x, PLOT.treadmill.z);
 
     this.labels = {};
-    this.pens = new PetPen(this.group);
+    // the pen's floor is up on its stage: the eggs and the ninjas stand on it
+    this.penFloor = new THREE.Group();
+    this.penFloor.position.y = PEN_RISE;
+    this.group.add(this.penFloor);
+    this.pens = new PetPen(this.penFloor);
     this.eggs = [];      // [{ mesh, glow, key }] per slot
     this.penKey = '';
-    // the owner's board stands on top of the treadmill's wooden (later stone) gate frame, by the pen's gate
-    this.ownerSign = new OwnerSign(this.group, new THREE.Vector3(PLOT.treadmill.x, FRAME_HEIGHT + 3.4 + OWNER_SIGN_HEIGHT / 2, PLOT.treadmill.z + FRAME_Z), OWNER_SIGN_HEIGHT);
+    // the owner's board floats high over the pen's gate (like the video's "ushand99's Base")
+    this.ownerSign = new OwnerSign(this.group, new THREE.Vector3(PLOT.penMaxX - 6, 20 + OWNER_SIGN_HEIGHT / 2, 0), OWNER_SIGN_HEIGHT);
     this.time = index * 1.7;
   }
 
   buildStatic(physics) {
     const v = new Voxels();
     const boxes = [];
-    const { penMinX, penMaxX, penHalfZ, gateHalf } = PLOT;
-    addFence(v, penMinX, -penHalfZ, penMaxX, -penHalfZ, boxes);
-    addFence(v, penMinX, penHalfZ, penMaxX, penHalfZ, boxes);
-    addFence(v, penMinX, -penHalfZ, penMinX, penHalfZ, boxes);
-    // the front: two sections with the open gate between them
-    addFence(v, penMaxX, -penHalfZ, penMaxX, -gateHalf, boxes);
-    addFence(v, penMaxX, gateHalf, penMaxX, penHalfZ, boxes);
-    for (const slot of PLOT.eggSlots) addStrawNest(v, slot.x, slot.z);
+    // the fence (its look comes with the Upgrade Pen level: setFrameLevel); its walls stop you here
+    for (const [ax, az, bx, bz] of fenceSides()) {
+      boxes.push([Math.min(ax, bx) - 0.7, Math.max(ax, bx) + 0.7, Math.min(az, bz) - 0.7, Math.max(az, bz) + 0.7, 5 + PEN_RISE]);
+    }
+    // the stage and its step: you walk up onto them
+    for (const [a, b, c, d, h] of stageFloors()) {
+      const p = plotToWorld(this.plot, a, c), q = plotToWorld(this.plot, b, d);
+      physics.addFloor(p.x, q.x, p.z, q.z, h * PLOT_SCALE);
+    }
+    this.setFrameLevel(1);
     addSignBoard(v, PLOT.treadmillSign.x, PLOT.treadmillSign.z);
+    addSignBoard(v, PLOT.penSign.x, PLOT.penSign.z);
     this.group.add(v.mesh());
 
+    // the training arena: a round raised floor inside a low wall you can jump over (or walk in by the door)
     const { x: tx, z: tz } = PLOT.treadmill;
-    boxes.push([tx - TREADMILL_HALF.x, tx + TREADMILL_HALF.x, tz - TREADMILL_HALF.z, tz - TREADMILL_BELT.backZ, 6]);
-    const beltA = plotToWorld(this.plot, tx - TREADMILL_BELT.halfX, tz - TREADMILL_BELT.backZ);
-    const beltB = plotToWorld(this.plot, tx + TREADMILL_BELT.halfX, tz + TREADMILL_BELT.frontZ);
-    physics.addSurface(beltA.x, beltB.x, beltA.z, beltB.z, TREADMILL_BELT.height * PLOT_SCALE, this.plot.rot + Math.PI);
-    // the treadmill's frame posts
-    for (const side of [-1, 1]) boxes.push([tx + side * FRAME_POST_X - 1.3, tx + side * FRAME_POST_X + 1.3, tz + FRAME_Z - 1.3, tz + FRAME_Z + 1.3, Infinity]);
-    const s = PLOT.treadmillSign;
-    boxes.push([s.x - 0.6, s.x + 0.6, s.z - 4.5, s.z + 4.5, 9]);
+    const mid = plotToWorld(this.plot, tx, tz);
+    const door = plotToWorld(this.plot, tx + Math.cos(ARENA.door), tz + Math.sin(ARENA.door));
+    physics.addRoundSurface(mid.x, mid.z, ARENA.wall * PLOT_SCALE, ARENA.height * PLOT_SCALE, {
+      floorR: ARENA.floor * PLOT_SCALE, doorAngle: Math.atan2(door.z - mid.z, door.x - mid.x), plot: this.index,
+    });
+    const half = ARENA_BLOCK / 2;
+    for (const [bx, bz] of arenaWallBlocks()) boxes.push([tx + bx - half, tx + bx + half, tz + bz - half, tz + bz + half, ARENA.wallHeight + 0.3]);
+    for (const s of [PLOT.treadmillSign, PLOT.penSign]) boxes.push([s.x - 0.8, s.x + 0.6, s.z - 4.7, s.z + 4.7, 9]);
     for (const [a, b, c, d, top] of boxes) {
       const p = plotToWorld(this.plot, a, c);
       const q = plotToWorld(this.plot, b, d);
@@ -126,10 +153,24 @@ export class PlotView {
     this.penGlow = new THREE.Mesh(new THREE.BoxGeometry(w, 6, PLOT.penHalfZ * 2), new THREE.MeshBasicMaterial({
       color: '#3dff6a', transparent: true, opacity: 0.16, depthWrite: false,
     }));
-    this.penGlow.position.set((PLOT.penMinX + PLOT.penMaxX) / 2, 3, 0);
+    this.penGlow.position.set((PLOT.penMinX + PLOT.penMaxX) / 2, 3 + PEN_RISE, 0);
     this.penGlow.renderOrder = 2;
     this.penGlow.visible = false;
     this.group.add(this.penGlow);
+  }
+
+  // The pen's frame at this Upgrade Pen level (rebuilt only when the level changes).
+  setFrameLevel(level) {
+    if (level === this.frameLevel) return;
+    this.frameLevel = level;
+    if (this.frame) {
+      this.group.remove(this.frame);
+      this.frame.geometry.dispose();
+    }
+    const v = new Voxels();
+    buildPenFrame(v, level);
+    this.frame = v.mesh();
+    this.group.add(this.frame);
   }
 
   // Replaces a text label; does nothing while its text is unchanged.
@@ -160,13 +201,29 @@ export class PlotView {
     return this.group.localToWorld(new THREE.Vector3(x, y, z));
   }
 
+  // How many of this pen's ninjas are shown (Game.updatePenViews: from the device and connection, and
+  // only for your own pen and the two nearest others; 0 hides them all, so they cost nothing). The
+  // newest ones show, so a ninja that just hatched always pops out of its egg.
+  setPetLimit(limit) {
+    if (limit === this.petLimit) return;
+    this.petLimit = limit;
+    this.applyPets();
+  }
+
+  applyPets() {
+    const json = this.petsJson || '';
+    const limit = this.petLimit ?? Infinity;
+    const key = `${json}|${limit}`;
+    if (key === this.petsKey) return;
+    this.petsKey = key;
+    const all = json ? parse(json) : [];
+    this.pens.sync(limit >= all.length ? all : limit > 0 ? all.slice(-limit) : []);
+  }
+
   sync(state, mine, owner = null, carrying = false) {
     this.ownerSign.set(owner);
-    const petsJson = state ? state.pets : '';
-    if (petsJson !== this.petsKey) {
-      this.petsKey = petsJson;
-      this.pens.sync(state ? parse(state.pets) : []);
-    }
+    this.petsJson = state ? state.pets : '';
+    this.applyPets();
     if (!state) this.pens.clear();
     this.billboard('empty', state ? '' : 'empty', state ? null : [{ text: 'Empty Plot', size: 80, fill: '#ffffff' }], 5,
       (PLOT.penMinX + PLOT.penMaxX) / 2, 9, 0);
@@ -176,27 +233,31 @@ export class PlotView {
       this.penKey = penJson;
       this.showPen(parse(penJson), mine);
     }
+    this.setFrameLevel(state?.penLevel || 1); // the frame grows stronger with every Upgrade Pen
     this.syncTreadmill(state, mine);
     this.penGlow.visible = !!(mine && carrying);
   }
 
   // The eggs growing in the nests, each with its timer, or "Hold E!" once it is ready.
   showPen(list, mine) {
+    // each egg sits in its own nest (its slot), not in list order
+    const bySlot = [];
+    list.forEach((e, k) => { bySlot[penSlotOf(e, k)] = e; });
     PLOT.eggSlots.forEach((slot, i) => {
-      const egg = list[i];
+      const egg = bySlot[i];
       const have = this.eggs[i];
       const key = egg ? `${egg.type}|${egg.rarity}|${egg.size}|${egg.kg}` : '';
       if (have && have.key !== key) {
-        this.group.remove(have.mesh, have.glow);
-        if (!egg) this.effects.burst(this.localToWorld(slot.x, 3, slot.z), '#fff6c8', 26, 22); // hatched
+        this.penFloor.remove(have.mesh, have.glow);
+        if (!egg) this.effects.burst(this.localToWorld(slot.x, 3 + PEN_RISE, slot.z), '#fff6c8', 26, 22); // hatched
         this.eggs[i] = null;
       }
       if (egg && !this.eggs[i]) {
         const mesh = createEgg(egg);
-        mesh.position.set(slot.x, 0.3, slot.z);
+        mesh.position.set(slot.x, 0, slot.z); // right on the grass of the pen
         const glow = createGlow('#f6ffd8', 7);
         glow.position.set(slot.x, 2.4, slot.z);
-        this.group.add(mesh, glow);
+        this.penFloor.add(mesh, glow);
         this.eggs[i] = { mesh, glow, key, size: EGG_SIZES[egg.size || 1]?.scale || 1 };
       }
       const e = this.eggs[i];
@@ -209,31 +270,43 @@ export class PlotView {
       const lines = ready
         ? [{ text: eggName(egg), size: 46, fill: RARITY_COLOR[egg.rarity] }, { text: mine ? 'Hold E!' : 'Ready!', size: 60, fill: '#ffe14a' }]
         : [{ text: eggName(egg), size: 46, fill: RARITY_COLOR[egg.rarity] }, { text: clockText(egg.left), size: 62, fill: '#ffffff' }];
-      this.billboard(`egg${i}`, `${ready}|${lines[1].text}|${lines[0].text}`, lines, 2.6, slot.x, 7.5 * Math.min(1.6, e?.size || 1), slot.z);
+      this.billboard(`egg${i}`, `${ready}|${lines[1].text}|${lines[0].text}`, lines, 2.6, slot.x, PEN_RISE + 7.5 * Math.min(1.6, e?.size || 1), slot.z);
     });
   }
 
+  // The arena and its "Upgrade Arena" board, and the "Upgrade Pen" board.
   syncTreadmill(state, mine) {
     const millId = state?.treadmill || 'none';
     const mill = treadmillById(millId);
     this.treadmill.sync(state);
     const next = state ? nextTreadmill(millId) : null;
-    const level = TREADMILLS.indexOf(mill);
     const { x, z } = PLOT.treadmillSign;
-    const signKey = state ? `${millId}|${mine}` : '';
-    this.setLabel('sign', signKey, state && (() => {
-      const lines = !next ? [{ text: 'MAX', size: 90, fill: '#ffd21f' }]
-        : mill.gain ? [
-          { text: 'Upgrade', size: 66, fill: '#ffffff' },
-          { text: `Level ${level} > Level ${level + 1}`, size: 40, fill: '#7dff3f' },
-          { text: `$${formatNumber(next.price)}`, size: 72, fill: '#ff5a5a' },
-        ] : [{ text: 'Unlock:', size: 70, fill: '#ffffff' }, { text: `$${formatNumber(next.price)}`, size: 84, fill: '#7dff3f' }];
-      const plane = makeTextPlane(lines, mill.gain && next ? 4.4 : 3.8, { side: THREE.DoubleSide });
-      plane.position.set(x + 0.5, 6.6, z);
-      plane.rotation.y = Math.PI / 2; // facing the lane
-      return plane;
-    }));
+    this.setLabel('sign', state ? `${millId}|${mine}` : '', state && (() => boardMesh(drawBoard({
+      title: mill.gain ? 'Upgrade Arena' : 'Unlock Arena',
+      line: next ? (mill.gain ? `${mill.name.replace(' Arena', '')} > ${next.name.replace(' Arena', '')}` : next.name) : mill.name,
+      lineColor: arenaColor(next?.id || millId),
+      price: next?.price || 0,
+      done: !next,
+    }), x, z, mine && next ? 'buyTreadmill' : null)));
+    const level = Math.min(MAX_PEN_LEVEL, state?.penLevel || 1);
+    const nextPen = state ? nextPenLevel(level) : null;
+    const p = PLOT.penSign;
+    this.setLabel('penSign', state ? `${level}|${mine}` : '', state && (() => boardMesh(drawBoard({
+      title: 'Upgrade Pen',
+      line: nextPen ? `Lv. ${level} > Lv. ${nextPen.level}` : `Lv. ${level}`,
+      lineColor: '#ffffff',
+      price: nextPen?.price || 0,
+      done: !nextPen,
+    }), p.x, p.z, mine && nextPen ? 'buyPen' : null)));
   }
+
+  // The boards (to click their green buttons).
+  boards() {
+    return ['sign', 'penSign'].map((k) => this.labels[k]?.object).filter(Boolean);
+  }
+
+  // Is someone spinning in this arena? (the floor's arrows race round)
+  setSpinning(on) { this.treadmill.setSpinning(on); }
 
   update(dt) {
     if (this.penGlow.visible) {
@@ -261,7 +334,7 @@ export class PlotView {
   hatchedAt(slot) {
     const s = PLOT.eggSlots[slot] || PLOT.eggSlots[0];
     this.pens.popAt = s;
-    const at = this.localToWorld(s.x, 2, s.z);
+    const at = this.localToWorld(s.x, 2 + PEN_RISE, s.z);
     if (TreadmillView.fancy) {
       this.effects.smoke(at, '#fff6e8', 16, 7);
       this.effects.magicDust(at.clone().setY(4), 40, 6, 16);

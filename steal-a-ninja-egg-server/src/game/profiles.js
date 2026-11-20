@@ -137,8 +137,9 @@ export function defaultProfile(userId, displayName) {
     eggsHatched: 0,
     timesCaught: 0,
     gemsSpent: 0,
-    treadmill: 'none',   // the treadmill in your pen (see TREADMILLS)
-    starterBonus: false, // paid once, on the first hatch: enough for the first treadmill
+    treadmill: 'none',   // the training arena by your pen (see TREADMILLS; it used to be a treadmill)
+    penLevel: 1,         // Upgrade Pen level: each one opens another egg slot (see PEN_LEVELS)
+    starterBonus: false, // paid once, when the first egg goes in the pen: enough to unlock the arena
     speedGift: false,    // the tutorial's free 10,000 Speed, claimed once
     pets: [],           // [{ id, cash }] cash = $ per second
     passes: {},

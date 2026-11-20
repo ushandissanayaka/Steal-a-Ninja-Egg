@@ -1,0 +1,297 @@
+# ============================================================
+# Steal a Ninja Egg -> Bloxity Legion (prod + stage)
+# ============================================================
+# Branch -> channel (the same on both platforms):
+#   dev           -> dev  channel  (https://steal-a-ninja-egg.dev.play.bloxity.io)
+#   master / main -> prod channel  (https://steal-a-ninja-egg.play.bloxity.io)
+#
+# Every push deploys to prod, and to stage too once the repo has LEGION_DEPLOY_TOKEN_STAGE (stage is
+# opt-in). A manual run (Actions -> Deploy to Bloxity -> Run workflow) deploys any branch to ONE
+# platform, chosen with "target" (staging by default).
+#
+# Repo secrets (Settings -> Secrets and variables -> Actions):
+#   LEGION_DEPLOY_TOKEN        deploy token from hosting.bloxity.io            (prod, required)
+#   LEGION_DEPLOY_TOKEN_STAGE  deploy token from hosting.stage.bloxity.io      (stage, optional)
+#   GHCR_PUSH_TOKEN            classic PAT of IMAGE_OWNER with write:packages (the server image)
+#   MONGODB_URI                (strongly recommended) the prod database every server pod saves to
+#   MONGODB_URI_STAGE          (optional) the stage database; stage never uses the prod one
+#
+# BEFORE THE FIRST RUN: the app must already exist on hosting.bloxity.io (and hosting.stage.bloxity.io
+# for stage) with the id below (GAME_ID); Legion has no create-on-deploy.
+# ONE-TIME after the first run: make the GHCR package `steal-a-ninja-egg-server` public, otherwise
+# Legion cannot pull the image.
+#
+# Rooms and load: there is no limit on players in the game, but one room holds 7 (ROOM_SIZE = the
+# room's maxClients: the lobby has 7 pens). When a room is full the matchmaker opens a new one, and
+# Boxity starts more pods (up to MAX_REPLICAS, each with many rooms) as players come. Boxity measures
+# the CPU per player itself and decides how many players each pod holds, so no seatCap is sent (the
+# team template's seatCap is replaced by roomSize, as Boxity's docs ask).
+#
+# One build for both platforms: the client gets NO environment, API URL or base domain; the platform
+# tells it where it runs (window.BLOXITY_ENV / the portal handshake). Server images are tagged per
+# platform (staging: stage-<channel>-<sha>), so a staging build never replaces a production image.
+
+name: Deploy to Bloxity
+
+on:
+  push:
+    branches: [master, main, dev]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which platform to deploy this branch to
+        type: choice
+        options: [staging, prod]
+        default: staging
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GAME_ID: steal-a-ninja-egg
+  IMAGE_OWNER: ushandissanayaka
+  IMAGE_NAME: steal-a-ninja-egg-server
+  SERVER_DIR: steal-a-ninja-egg-server
+  CLIENT_DIR: steal-a-ninja-egg-client
+  ROOM_SIZE: 7
+  MAX_REPLICAS: 20
+
+jobs:
+  # The platforms to deploy to: a manual run uses the chosen one; a push always prod, plus staging
+  # when its token is set.
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+    steps:
+      - id: pick
+        env:
+          STAGE_TOKEN: ${{ secrets.LEGION_DEPLOY_TOKEN_STAGE }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          CHOSEN: ${{ inputs.target }}
+        run: |
+          if [ "$MANUAL" = "true" ]; then
+            echo "list=[\"${CHOSEN:-staging}\"]" >> "$GITHUB_OUTPUT"
+          elif [ -n "${STAGE_TOKEN:-}" ]; then
+            echo 'list=["prod","staging"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'list=["prod"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: targets
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # a stage failure never blocks or undoes the prod deploy
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.list) }}
+    name: deploy (${{ matrix.target }})
+    steps:
+      - uses: actions/checkout@v4
+
+      # This target's token and URLs. A staging job only ever reads the stage token.
+      - name: Pick this platform's token and URLs
+        id: t
+        env:
+          TARGET: ${{ matrix.target }}
+          PROD_TOKEN: ${{ secrets.LEGION_DEPLOY_TOKEN }}
+          STAGE_TOKEN: ${{ secrets.LEGION_DEPLOY_TOKEN_STAGE }}
+          PROD_MONGO: ${{ secrets.MONGODB_URI }}
+          STAGE_MONGO: ${{ secrets.MONGODB_URI_STAGE }}
+        run: |
+          if [ "$TARGET" = "staging" ]; then
+            if [ -z "${STAGE_TOKEN:-}" ]; then
+              echo "::error::LEGION_DEPLOY_TOKEN_STAGE is not set: cannot deploy to stage (the prod token is never used for stage)."
+              exit 1
+            fi
+            token="$STAGE_TOKEN"; mongo="${STAGE_MONGO:-}"
+            echo "api=https://api.stage.bloxity.io" >> "$GITHUB_OUTPUT"
+            echo "legion=https://legion.stage.bloxity.io" >> "$GITHUB_OUTPUT"
+            echo "prefix=stage-" >> "$GITHUB_OUTPUT"
+            echo "play=stage.bloxity.io" >> "$GITHUB_OUTPUT"
+          else
+            if [ -z "${PROD_TOKEN:-}" ]; then
+              echo "::error::LEGION_DEPLOY_TOKEN is not set (the deploy token from hosting.bloxity.io)."
+              exit 1
+            fi
+            token="$PROD_TOKEN"; mongo="${PROD_MONGO:-}"
+            echo "api=https://api.bloxity.io" >> "$GITHUB_OUTPUT"
+            echo "legion=https://legion.bloxity.io" >> "$GITHUB_OUTPUT"
+            echo "prefix=" >> "$GITHUB_OUTPUT"
+            echo "play=bloxity.io" >> "$GITHUB_OUTPUT"
+          fi
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          if [ -n "$mongo" ]; then echo "::add-mask::$mongo"; fi
+          echo "mongo=$mongo" >> "$GITHUB_OUTPUT"
+          if [ -z "$mongo" ]; then
+            echo "::warning::No database secret for $TARGET: unless Bloxity hosting gives the pods one, saves stay on one pod and are lost on redeploy."
+          fi
+
+      # Informational only - cannot fail the build. Tells a bad token apart from a token that is fine
+      # but has no app called GAME_ID yet (create it on hosting.bloxity.io first).
+      - name: Diagnose the token against Legion
+        continue-on-error: true
+        env:
+          LEGION_TOKEN: ${{ steps.t.outputs.token }}
+          LEGION_URL: ${{ steps.t.outputs.legion }}
+          KNOWN_GOOD_APP: squirrel-escape
+        run: |
+          set -uo pipefail
+          probe () {
+            local app="$1" body code
+            body="$(mktemp)"
+            code="$(curl -sS -o "$body" -w '%{http_code}' --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer ${LEGION_TOKEN}" "${LEGION_URL}/v1/apps/${app}")" || code="000 (unreachable)"
+            printf '  %-30s HTTP %-6s %s\n' "$app" "$code" "$(head -c 160 "$body" | tr -d '\r\n')"
+          }
+          echo "Asking Legion about both apps with the SAME token:"
+          probe "${GAME_ID}"
+          probe "${KNOWN_GOOD_APP}"
+          echo "  * both 401  -> the token is wrong, expired, or from another account."
+          echo "  * ${KNOWN_GOOD_APP} ok, ${GAME_ID} 401/404 -> token is valid, but no app '${GAME_ID}' exists yet."
+          echo "  * both ok   -> credentials are fine."
+
+      - name: Work out the channel and image tag
+        id: ch
+        env:
+          GHCR_PUSH_TOKEN: ${{ secrets.GHCR_PUSH_TOKEN }}
+          PREFIX: ${{ steps.t.outputs.prefix }}
+        run: |
+          if [ "${{ github.ref_name }}" = "dev" ]; then channel=dev; else channel=prod; fi
+          sha="${GITHUB_SHA::7}"
+          if [ -n "${GHCR_PUSH_TOKEN:-}" ]; then
+            owner="${IMAGE_OWNER,,}"; user="${IMAGE_OWNER}"
+          else
+            owner="${GITHUB_REPOSITORY_OWNER,,}"; user="${{ github.actor }}"
+            echo "::warning::GHCR_PUSH_TOKEN is not set - publishing to ghcr.io/${owner} with GITHUB_TOKEN. If that package is private the rollout never lands."
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "ghcr_user=$user" >> "$GITHUB_OUTPUT"
+          echo "tag=${PREFIX}${channel}-${sha}" >> "$GITHUB_OUTPUT"
+
+      # ---------- backend (Colyseus server) ----------
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ steps.ch.outputs.ghcr_user }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the server image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ env.SERVER_DIR }}
+          push: true
+          tags: ghcr.io/${{ steps.ch.outputs.owner }}/${{ env.IMAGE_NAME }}:${{ steps.ch.outputs.tag }}
+          build-args: |
+            APP_VERSION=${{ steps.ch.outputs.sha }}
+
+      - name: Wait until the image can be pulled
+        env:
+          REPO: ${{ steps.ch.outputs.owner }}/${{ env.IMAGE_NAME }}
+          TAG: ${{ steps.ch.outputs.tag }}
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 24); do
+            tok="$(curl -s "https://ghcr.io/token?scope=repository:${REPO}:pull" | jq -r '.token // empty')"
+            code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${tok}" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/${REPO}/manifests/${TAG}")"
+            if [ "$code" = "200" ]; then echo "ghcr.io/${REPO}:${TAG} can be pulled."; exit 0; fi
+            echo "Not pullable yet (HTTP $code), waiting... ($i/24)"
+            sleep 5
+          done
+          echo "::error::ghcr.io/${REPO}:${TAG} still cannot be pulled anonymously. Make the GHCR package public."
+          exit 1
+
+      - name: Tell Legion to roll it out
+        env:
+          LEGION_TOKEN: ${{ steps.t.outputs.token }}
+          LEGION_URL: ${{ steps.t.outputs.legion }}
+          MONGODB_URI: ${{ steps.t.outputs.mongo }}
+          IMAGE: ghcr.io/${{ steps.ch.outputs.owner }}/${{ env.IMAGE_NAME }}:${{ steps.ch.outputs.tag }}
+          CHANNEL: ${{ steps.ch.outputs.channel }}
+          VERSION: ${{ steps.ch.outputs.sha }}
+        run: |
+          set -uo pipefail
+          url="${LEGION_URL}/v1/apps/${GAME_ID}/deploy"
+          echo "POST $url  image=$IMAGE channel=$CHANNEL roomSize=$ROOM_SIZE maxReplicas=$MAX_REPLICAS"
+          payload="$(jq -n \
+            --arg channel "$CHANNEL" --arg image "$IMAGE" --arg version "$VERSION" \
+            --argjson roomSize "$ROOM_SIZE" --argjson maxReplicas "$MAX_REPLICAS" \
+            --arg mongo "${MONGODB_URI:-}" \
+            '{channel: $channel, image: $image, version: $version, roomSize: $roomSize, maxReplicas: $maxReplicas}
+             + (if $mongo != "" then {env: {MONGODB_URI: $mongo}} else {} end)')"
+          body="$(mktemp)"
+          code="$(curl -sS -o "$body" -w '%{http_code}' -X POST "$url" \
+            --connect-timeout 15 --max-time 120 --retry 3 --retry-connrefused --retry-delay 5 \
+            -H "Authorization: Bearer ${LEGION_TOKEN}" -H 'Content-Type: application/json' \
+            -d "$payload")" || { echo "::error::curl could not reach Legion (network/DNS)."; exit 1; }
+          echo "HTTP $code"; cat "$body"; echo
+          case "$code" in
+            2*) echo "Rollout accepted." ;;
+            401|403) echo "::error::Legion rejected the token (HTTP $code)."; exit 1 ;;
+            404) echo "::error::Legion has no app called '${GAME_ID}' on this platform (HTTP 404). Create it first."; exit 1 ;;
+            *) echo "::error::Legion rollout failed with HTTP $code."; exit 1 ;;
+          esac
+
+      # ---------- frontend (three.js client): one build for every platform ----------
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # VITE_BLOXITY_HOSTING_ID makes the client join through the Bloxity matchmaker (no URLs baked in).
+      - name: Build the client
+        working-directory: ${{ env.CLIENT_DIR }}
+        env:
+          VITE_GAME_SLUG: ${{ env.GAME_ID }}
+          VITE_BLOXITY_HOSTING_ID: ${{ env.GAME_ID }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Zip the build
+        working-directory: ${{ env.CLIENT_DIR }}/dist
+        run: zip -qr ../../build.zip .
+
+      - name: Upload the client to Bloxity
+        env:
+          LEGION_TOKEN: ${{ steps.t.outputs.token }}
+          API_URL: ${{ steps.t.outputs.api }}
+          CHANNEL: ${{ steps.ch.outputs.channel }}
+          VERSION: ${{ steps.ch.outputs.sha }}
+        run: |
+          set -uo pipefail
+          url="${API_URL}/v1/hosting/games/${GAME_ID}/frontend?channel=${CHANNEL}&version=${VERSION}"
+          echo "POST $url"
+          body="$(mktemp)"
+          code="$(curl -sS -o "$body" -w '%{http_code}' -X POST "$url" \
+            --connect-timeout 15 --max-time 300 \
+            -H "Authorization: Bearer ${LEGION_TOKEN}" -H "Content-Type: application/zip" \
+            --data-binary @build.zip)" || { echo "::error::curl could not reach the hosting API (network/DNS)."; exit 1; }
+          echo "HTTP $code"; cat "$body"; echo
+          case "$code" in
+            2*) echo "Client uploaded." ;;
+            401|403) echo "::error::Hosting rejected the token (HTTP $code)."; exit 1 ;;
+            404) echo "::error::No hosted game called '${GAME_ID}' on this platform (HTTP 404)."; exit 1 ;;
+            413) echo "::error::build.zip is too large (HTTP 413)."; exit 1 ;;
+            *) echo "::error::Client upload failed with HTTP $code."; exit 1 ;;
+          esac
+
+      - name: Where it went
+        env:
+          PLAY: ${{ steps.t.outputs.play }}
+        run: |
+          if [ "${{ steps.ch.outputs.channel }}" = "prod" ]; then
+            echo "Play: https://${GAME_ID}.play.${PLAY}"
+          else
+            echo "Play: https://${GAME_ID}.dev.play.${PLAY}"
+          fi

@@ -1,50 +1,188 @@
-// Eggs: the shell's colour is the egg's rarity, the spots are its biome's colour. Eggs on a nest
-// sit still with a "Rare Egg / 36 kg" label; dropped eggs fly out of the carrier's hands, sit in a
-// little nest and blink before they vanish.
+// Eggs: built out of lots of little boxes in the shape of an egg (wider at the bottom). The shell's
+// colour is the egg's rarity, the spots are its biome's colour, every little box a shade lighter or
+// darker so the blocks show. Eggs on a nest sit still with a "Rare Egg / 36 kg" label and magic dust
+// rising up round them; dropped eggs fly out of the carrier's hands, sit in a little nest and blink
+// before they vanish.
 
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { BIOME_ALIAS, BIOME_COLOR, EGG_COLOR, EGG_SIZES, RARITY_COLOR, RULES, biomeIndex, eggName } from '../../shared/gameData.js';
-import { eggTexture } from '../util/textures.js';
+import { BIOME_ALIAS, BIOME_COLOR, EGG_COLOR, EGG_SIZES, NEST_RISE, RARITY_COLOR, RULES, biomeIndex, eggName, onNestStage } from '../../shared/gameData.js';
 import { makeBillboard } from '../util/canvasText.js';
-import { MagicDust } from './Effects.js';
+import { Voxels } from '../util/bake.js';
+import { glowMap } from './Effects.js';
 
-let eggGeometry = null;
-function geometry() {
-  if (!eggGeometry) {
-    const points = [];
-    for (let i = 0; i <= 18; i++) {
-      const t = (i / 18) * Math.PI;
-      // wider at the bottom than at the top
-      points.push(new THREE.Vector2(Math.sin(t) * (1 - 0.2 * Math.cos(t) * -1) * 0.82, -Math.cos(t) * 1.1 + 1.1));
+// The egg's outline: radius at height y (0 at the bottom .. EGG_H at the top), the same curve the
+// spots sit on (shellPoint below).
+const EGG_H = 2.2;
+const radiusAt = (y) => {
+  const c = Math.max(-1, Math.min(1, 1 - y / 1.1)); // cos t
+  return Math.sqrt(1 - c * c) * (1 + 0.2 * c) * 0.82;
+};
+const CELL = 0.14;             // the size of one little box
+const SPOTS = 10;
+
+// a tiny repeatable random number from a few integers
+const hash = (...n) => {
+  let h = 2166136261;
+  for (const v of n) h = Math.imul(h ^ (v | 0), 16777619);
+  return ((h >>> 0) % 10000) / 10000;
+};
+
+// The shell of little boxes for one biome + rarity (only the boxes on the outside: it is hollow).
+const voxelGeometries = new Map();
+function geometry(type, rarity) {
+  const key = `${type}|${rarity}`;
+  if (voxelGeometries.has(key)) return voxelGeometries.get(key);
+  const shell = new THREE.Color(EGG_COLOR[rarity] || EGG_COLOR.Common);
+  const spotHex = BIOME_COLOR[BIOME_ALIAS[type] || type];
+  const spot = spotHex ? new THREE.Color(spotHex) : null;
+  // the spots: a few round patches on the shell, the same on every egg of this biome
+  const seed = [...String(type)].reduce((s, ch) => s + ch.charCodeAt(0), 0);
+  const centers = Array.from({ length: SPOTS }, (_, i) => shellPoint(0.55 + hash(seed, i, 1) * 2.1, hash(seed, i, 2) * Math.PI * 2).p);
+  const n = Math.ceil(1.05 / CELL), ny = Math.ceil(EGG_H / CELL);
+  const inside = (ix, iy, iz) => {
+    if (iy < 0 || iy >= ny) return false;
+    const y = (iy + 0.5) * CELL, x = (ix + 0.5) * CELL, z = (iz + 0.5) * CELL;
+    return Math.hypot(x, z) <= radiusAt(y);
+  };
+  const v = new Voxels();
+  const c = new THREE.Color();
+  for (let iy = 0; iy < ny; iy++) {
+    for (let ix = -n - 1; ix <= n; ix++) {
+      for (let iz = -n - 1; iz <= n; iz++) {
+        if (!inside(ix, iy, iz)) continue;
+        if (inside(ix + 1, iy, iz) && inside(ix - 1, iy, iz) && inside(ix, iy + 1, iz) && inside(ix, iy - 1, iz)
+          && inside(ix, iy, iz + 1) && inside(ix, iy, iz - 1)) continue; // hidden inside
+        const x = (ix + 0.5) * CELL, y = iy * CELL, z = (iz + 0.5) * CELL;
+        const p = new THREE.Vector3(x, y + CELL / 2, z);
+        const inSpot = spot && centers.some((q) => q.distanceTo(p) < 0.33 + hash(ix, iy, iz, 9) * 0.06);
+        c.copy(inSpot ? spot : shell).multiplyScalar(0.9 + hash(ix, iy, iz) * 0.2);
+        v.box(x, y, z, CELL, CELL, CELL, c.getHex());
+      }
     }
-    eggGeometry = new THREE.LatheGeometry(points, 24);
-    eggGeometry.computeVertexNormals();
   }
-  return eggGeometry;
+  const g = v.geometry();
+  g.deleteAttribute('uv');
+  voxelGeometries.set(key, g);
+  return g;
 }
 
 const GLOWING = new Set(['Mythic', 'Secret', 'Divine', 'Eternal']);
 const materials = new Map();
 function material(type, rarity) {
-  const key = `${type}|${rarity}`;
+  const key = GLOWING.has(rarity) ? rarity : 'plain';
   if (!materials.has(key)) {
-    const shell = EGG_COLOR[rarity] || EGG_COLOR.Common;
-    const options = { map: eggTexture(shell, BIOME_COLOR[type] || null) };
+    const options = { vertexColors: true };
     if (GLOWING.has(rarity)) options.emissive = new THREE.Color(RARITY_COLOR[rarity]).multiplyScalar(0.35);
     materials.set(key, new THREE.MeshLambertMaterial(options));
   }
   return materials.get(key);
 }
 
-// ------------------------------------------------------------------ the eyes on the shell
+// ------------------------------------------------------------------ the magic dust
 
-// Every egg looks back at you: a stage's eggs have as many glowing slit eyes round the shell as the
-// stage's number (1 on the first stage ... 10 on the last). Cheap: one shared, merged geometry per
-// number of eyes and one unlit material per stage, so an egg's eyes are a single extra draw call.
-const eyeGeometries = new Map();
-const eyeMaterials = new Map();
-const _c = new THREE.Color();
+// Glowing specks that rise up from where an egg sits, spiralling round it and fading out high
+// above (in the egg's group: x/z round 0, y from the ground). One Points per egg.
+const DUST_WHITE = new THREE.Color('#ffffff');
+const DUST_GOLD = new THREE.Color('#ffd75e');
+// A sparkle of its own colour with a bright white heart and a soft edge, drawn with normal blending
+// (not additive), so it shows against a bright day sky as well as at night. Each point has its own
+// size and alpha.
+let dustMaterial = null;
+function eggDustMaterial() {
+  dustMaterial ??= new THREE.ShaderMaterial({
+    uniforms: { uScale: { value: 400 } },
+    vertexShader: `
+      attribute vec3 color; attribute float alpha; attribute float psize;
+      varying vec3 vColor; varying float vAlpha;
+      uniform float uScale;
+      void main() {
+        vColor = color; vAlpha = alpha;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = psize * uScale / -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      varying vec3 vColor; varying float vAlpha;
+      void main() {
+        vec2 q = gl_PointCoord - 0.5;
+        float d = length(q) * 2.0;
+        // a four-pointed twinkle over a round glow
+        float star = max(0.0, 1.0 - abs(q.x) * 9.0) * max(0.0, 1.0 - abs(q.y) * 2.2) + max(0.0, 1.0 - abs(q.y) * 9.0) * max(0.0, 1.0 - abs(q.x) * 2.2);
+        float glow = smoothstep(1.0, 0.0, d);
+        float a = clamp(glow * glow + star, 0.0, 1.0) * vAlpha;
+        if (a < 0.02) discard;
+        vec3 c = mix(vColor, vec3(1.0), clamp(smoothstep(0.45, 0.0, d) + star * 0.6, 0.0, 1.0));
+        gl_FragColor = vec4(c, a);
+      }`,
+    transparent: true, depthWrite: false,
+  });
+  return dustMaterial;
+}
+export class EggDust {
+  constructor(parent, size, rarity, count = 16) {
+    this.size = size;
+    this.tints = [new THREE.Color(RARITY_COLOR[rarity] || '#ffffff').lerp(DUST_WHITE, 0.25), DUST_GOLD, DUST_WHITE];
+    this.positions = new Float32Array(count * 3);
+    this.colors = new Float32Array(count * 3);
+    this.alphas = new Float32Array(count);
+    this.sizes = new Float32Array(count);
+    this.specks = Array.from({ length: count }, (_, i) => {
+      const s = { color: this.tints[i % this.tints.length] };
+      this.respawn(s);
+      s.age = Math.random() * s.life;
+      return s;
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+    geometry.setAttribute('alpha', new THREE.BufferAttribute(this.alphas, 1));
+    geometry.setAttribute('psize', new THREE.BufferAttribute(this.sizes, 1));
+    this.points = new THREE.Points(geometry, eggDustMaterial());
+    this.points.renderOrder = 6;
+    this.points.frustumCulled = false;
+    parent.add(this.points);
+  }
+
+  respawn(s) {
+    s.angle = Math.random() * Math.PI * 2;
+    s.r = this.size * (1 + Math.random() * 0.9);
+    s.age = 0;
+    s.life = 1.6 + Math.random() * 1.4;
+    s.rise = this.size * (2.6 + Math.random() * 2.2);
+    s.spin = (Math.random() < 0.5 ? -1 : 1) * (0.9 + Math.random() * 1.2);
+    s.phase = Math.random() * 10;
+    s.size = this.size * (0.32 + Math.random() * 0.3);
+  }
+
+  update(dt) {
+    this.specks.forEach((s, i) => {
+      s.age += dt;
+      if (s.age >= s.life) this.respawn(s);
+      s.angle += s.spin * dt;
+      const k = s.age / s.life;
+      const r = s.r * (1 - k * 0.45); // drawn in a little as it rises
+      const j = i * 3;
+      this.positions[j] = Math.cos(s.angle) * r;
+      this.positions[j + 1] = 0.3 + s.rise * s.age;
+      this.positions[j + 2] = Math.sin(s.angle) * r;
+      // in quickly, twinkling, out slowly at the top
+      this.alphas[i] = Math.min(1, k * 6) * (1 - k) * (0.65 + 0.35 * Math.sin(s.age * 14 + s.phase));
+      this.sizes[i] = s.size * (0.8 + 0.2 * Math.sin(s.age * 9 + s.phase));
+      this.colors[j] = s.color.r;
+      this.colors[j + 1] = s.color.g;
+      this.colors[j + 2] = s.color.b;
+    });
+    const a = this.points.geometry.attributes;
+    a.position.needsUpdate = a.color.needsUpdate = a.alpha.needsUpdate = a.psize.needsUpdate = true;
+  }
+
+  dispose() {
+    this.points.parent?.remove(this.points);
+    this.points.geometry.dispose();
+  }
+}
+
+// ------------------------------------------------------------------ the shell
 
 // a point on the shell (the lathe's profile, t = 0 bottom .. PI top) and the direction out of it
 function shellPoint(t, phi) {
@@ -52,64 +190,12 @@ function shellPoint(t, phi) {
   return { p: new THREE.Vector3(Math.sin(phi) * r, y, Math.cos(phi) * r), n: new THREE.Vector3(Math.sin(phi), 0.25 - (t - 1.6) * 0.6, Math.cos(phi)).normalize() };
 }
 
-function oneEye(size, colors) {
-  // an almond of glow (vertex colour 1 = the stage's tint), a dark rim, and a black slit pupil
-  const parts = [
-    [new THREE.SphereGeometry(1, 12, 8).scale(size * 0.62, size, size * 0.22), colors.glow],
-    [new THREE.SphereGeometry(1, 12, 8).scale(size * 0.74, size * 1.12, size * 0.16).translate(0, 0, -size * 0.04), colors.rim],
-    [new THREE.SphereGeometry(1, 8, 6).scale(size * 0.13, size * 0.78, size * 0.12).translate(0, 0, size * 0.14), colors.slit],
-  ];
-  return parts.map(([g, col]) => {
-    g.deleteAttribute('uv');
-    const n = g.attributes.position.count, c = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { c[i * 3] = col[0]; c[i * 3 + 1] = col[1]; c[i * 3 + 2] = col[2]; }
-    g.setAttribute('color', new THREE.BufferAttribute(c, 3));
-    return g;
-  });
-}
-
-function eyeGeometry(count) {
-  if (!eyeGeometries.has(count)) {
-    const colors = { glow: [1, 1, 1], rim: [0.22, 0.12, 0.3], slit: [0.03, 0.02, 0.05] };
-    // one ring of eyes round the middle; past five, a second ring higher up
-    const rings = count <= 5 ? [[1.55, count]] : [[1.35, Math.ceil(count / 2)], [2.05, Math.floor(count / 2)]];
-    const size = count === 1 ? 0.3 : count <= 5 ? 0.24 : 0.19;
-    const list = [];
-    const q = new THREE.Quaternion(), m = new THREE.Matrix4(), Z = new THREE.Vector3(0, 0, 1);
-    rings.forEach(([t, n], ring) => {
-      for (let i = 0; i < n; i++) {
-        const phi = (i / n) * Math.PI * 2 + ring * (Math.PI / n);
-        const { p, n: nor } = shellPoint(t, phi);
-        q.setFromUnitVectors(Z, nor);
-        m.compose(p.addScaledVector(nor, size * 0.05), q, new THREE.Vector3(1, 1, 1));
-        for (const g of oneEye(size, colors)) list.push(g.applyMatrix4(m));
-      }
-    });
-    eyeGeometries.set(count, mergeGeometries(list));
-  }
-  return eyeGeometries.get(count);
-}
-
-function eyeMaterial(type) {
-  if (!eyeMaterials.has(type)) {
-    // the stage's colour, made bright (white-hot in the middle of the tint) so it reads as a glow
-    _c.set(BIOME_COLOR[BIOME_ALIAS[type] || type] || '#ff4af0');
-    const hsl = {};
-    _c.getHSL(hsl);
-    _c.setHSL(hsl.h, Math.max(0.75, hsl.s), Math.max(0.62, hsl.l));
-    eyeMaterials.set(type, new THREE.MeshBasicMaterial({ vertexColors: true, color: _c.clone() }));
-  }
-  return eyeMaterials.get(type);
-}
-
 // egg: { type, rarity } (or just a biome id: a Common egg of that biome)
 export function createEgg(egg) {
   const e = typeof egg === 'string' ? { type: egg, rarity: 'Common' } : egg || {};
-  const type = e.type || 'pumpkin';
-  const mesh = new THREE.Mesh(geometry(), material(type, e.rarity || 'Common'));
+  const type = e.type || 'dojo';
+  const mesh = new THREE.Mesh(geometry(type, e.rarity || 'Common'), material(type, e.rarity || 'Common'));
   mesh.castShadow = true;
-  const eyes = new THREE.Mesh(eyeGeometry(biomeIndex(type) + 1), eyeMaterial(type));
-  mesh.add(eyes);
   return mesh;
 }
 
@@ -128,7 +214,7 @@ const FLY_START_HEIGHT = 4;
 const FLY_PEAK = 6;
 const BOUNCE_SECONDS = 0.4;
 const BLINK_SECONDS = 5;      // a dropped egg blinks for this long before it vanishes
-export const GROUND_EGG_SCALE = 1.7;
+export const GROUND_EGG_SCALE = 2.6; // eggs on the track (and dropped ones): big
 const NEST_SCALE = 1.6;
 const nestMaterial = new THREE.MeshLambertMaterial({ color: '#7a3a22' });
 const nestGeometry = new THREE.CylinderGeometry(1.5, 1.2, 0.6, 10);
@@ -147,11 +233,11 @@ export class GroundEggView {
     this.effects = effects;
     this.from = { x: data.ox ?? data.x, z: data.oz ?? data.z };
     this.group = new THREE.Group();
-    this.group.position.set(data.x, 0, data.z);
+    this.group.position.set(data.x, this.onNest || onNestStage(data.x, data.z) ? NEST_RISE : 0, data.z); // up on the nest's stage
     this.egg = createEgg(data);
     this.egg.scale.setScalar(GROUND_EGG_SCALE * this.size);
     this.label = createEggLabel(data);
-    this.labelY = 1.4 + 3.8 * this.size;
+    this.labelY = 1.6 + 2.35 * GROUND_EGG_SCALE * this.size; // over the top of the egg
     this.label.position.y = this.labelY;
     this.group.add(this.egg, this.label);
     if (!this.onNest) {
@@ -161,10 +247,10 @@ export class GroundEggView {
       this.nest.position.y = 0.3 * NEST_SCALE * this.size;
       this.group.add(this.nest);
     }
-    // rare eggs sparkle so they can be spotted from far away
-    this.dust = GLOWING.has(data.rarity) || data.rarity === 'Legendary'
-      ? new MagicDust(this.group, [new THREE.Vector3(0, 1.4 * this.size, 0)], 3 * this.size)
-      : null;
+    // magic dust rising up from where the egg sits (more of it round the rare ones, so they can be
+    // spotted from far away)
+    const rare = GLOWING.has(data.rarity) || data.rarity === 'Legendary';
+    this.dust = new EggDust(this.group, GROUND_EGG_SCALE * this.size * 0.9, data.rarity, rare ? 34 : 22);
     scene.add(this.group);
     const flies = fly && !this.onNest;
     this.t = flies ? 0 : FLY_SECONDS + BOUNCE_SECONDS;
@@ -187,12 +273,12 @@ export class GroundEggView {
     if (this.nest) this.nest.visible = landed;
     this.label.visible = landed;
     if (this.dust) {
-      this.dust.points.visible = landed && GroundEggView.sparkles;
+      this.dust.points.visible = landed; // day and night, every quality
       if (this.dust.points.visible && this.group.visible) this.dust.update(dt);
     }
     const lx = (this.from.x - this.x) * (1 - ease), lz = (this.from.z - this.z) * (1 - ease);
     const bounce = landed ? Math.max(0, Math.sin(Math.min(1, (this.t - FLY_SECONDS) / BOUNCE_SECONDS) * Math.PI) * 0.9) : 0;
-    const base = this.nest ? 0.45 * NEST_SCALE * this.size : 0.25;
+    const base = this.nest ? 0.45 * NEST_SCALE * this.size : 0.75; // on a nest: up on the basket's floor
     this.egg.position.set(lx, base + FLY_START_HEIGHT * (1 - k) + 4 * FLY_PEAK * k * (1 - k) + bounce, lz);
     this.egg.rotation.z = landed ? Math.sin(this.spawnT * 2.2) * 0.06 : k * 5;
     if (this.pop < 1) {
@@ -208,9 +294,6 @@ export class GroundEggView {
     this.group.parent?.remove(this.group);
     this.label.material.map.dispose();
     this.label.material.dispose();
-    if (this.dust) {
-      this.dust.points.geometry.dispose();
-      this.dust.points.material.dispose();
-    }
+    this.dust?.dispose();
   }
 }

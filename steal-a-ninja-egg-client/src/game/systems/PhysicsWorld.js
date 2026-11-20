@@ -32,8 +32,23 @@ export class PhysicsWorld {
     });
   }
 
+  // A plain raised floor you walk up onto (the pens' stages): never a treadmill.
+  addFloor(minX, maxX, minZ, maxZ, height) {
+    this.surfaces.push({
+      minX: Math.min(minX, maxX), maxX: Math.max(minX, maxX),
+      minZ: Math.min(minZ, maxZ), maxZ: Math.max(minZ, maxZ), height, floor: true,
+    });
+  }
+
+  // A round raised floor (the training arena): standing still on it you spin.
+  addRoundSurface(x, z, r, height, extra = {}) {
+    this.surfaces.push({ round: true, x, z, r, height, ...extra });
+  }
+
   surfaceAt(x, z) {
-    return this.surfaces.find((s) => x >= s.minX && x <= s.maxX && z >= s.minZ && z <= s.maxZ) || null;
+    return this.surfaces.find((s) => (s.round
+      ? Math.hypot(x - s.x, z - s.z) <= s.r
+      : x >= s.minX && x <= s.maxX && z >= s.minZ && z <= s.maxZ)) || null;
   }
 
   step(body, dt) {

@@ -30,8 +30,8 @@ export default function App() {
       <div className="viewport" ref={container} />
       <Hud
         onDrop={() => game.current?.interaction?.dropEggs()}
-        onSwing={() => game.current?.interaction?.click()}
-        onAction={(type, payload) => game.current?.room?.send(type, payload)}
+        onSwing={() => game.current?.toggleTornado()}
+        onAction={(type, payload) => (type === 'exitArena' ? game.current?.player?.exitArena() : game.current?.room?.send(type, payload))}
         onMute={(muted) => bloxity.setMuted(muted)}
       />
       <MobileControls game={game} />

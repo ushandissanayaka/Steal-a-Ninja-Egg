@@ -45,7 +45,8 @@ function fitName(name, maxWidth) {
 function draw(g, { name, mine }, img) {
   g.clearRect(0, 0, W, H);
   const accent = mine ? '#46e24a' : '#ffc531';
-  roundRect(g, 8, 8, W - 16, H - 16, 36);
+  // a round (pill) board: fully rounded ends
+  roundRect(g, 8, 8, W - 16, H - 16, (H - 16) / 2);
   g.fillStyle = 'rgba(16, 18, 26, 0.9)';
   g.fill();
   g.lineWidth = 10;
@@ -53,7 +54,7 @@ function draw(g, { name, mine }, img) {
   g.stroke();
 
   // round profile picture with a colored ring
-  const cx = 34 + PIC / 2, cy = H / 2;
+  const cx = 8 + (H - 16) / 2, cy = H / 2; // the picture sits in the round left end
   g.save();
   g.beginPath();
   g.arc(cx, cy, PIC / 2, 0, Math.PI * 2);
@@ -68,8 +69,8 @@ function draw(g, { name, mine }, img) {
   g.strokeStyle = accent;
   g.stroke();
 
-  const textX = cx + PIC / 2 + 24;
-  const textW = W - textX - 34;
+  const textX = cx + PIC / 2 + 18;
+  const textW = W - textX - 70; // clear of the round right end
   const middle = textX + textW / 2;
   drawOutlinedText(g, mine ? 'YOUR BASE' : 'BASE OF', middle, 92, {
     size: 44, fill: accent, font: FONT_TITLE, weight: 400, stroke: '#0b0c10', strokeWidth: 6,

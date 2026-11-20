@@ -6,6 +6,7 @@ import { makeBillboard } from '../util/canvasText.js';
 import { PETS, PLOT, RARITY_COLOR, formatNumber, petSize } from '../../shared/gameData.js';
 import { CREATURE_BUILDERS } from './Creatures.js';
 import { animateBlockAnimal, createBlockAnimal, hasBlockAnimal, isGiant } from './BlockAnimals.js';
+import { buildNinjaPet, isNinjaPet } from './NinjaPets.js';
 
 const WHITE = '#ffffff', BLACK = '#17181c';
 
@@ -383,6 +384,7 @@ function petGeometry(id) {
 // The animals that hatch from eggs are block animals (BlockAnimals.js); the guardians' little
 // voxel versions and anything else still come from the builders here.
 export function createPetMesh(id) {
+  if (isNinjaPet(id)) return buildNinjaPet(id); // the first six stages hatch ninjas (NinjaPets.js)
   if (hasBlockAnimal(id)) return createBlockAnimal(id);
   return petGeometry(id).mesh({ receiveShadow: false });
 }
@@ -423,12 +425,15 @@ class Pet {
   constructor(pet, parent, from) {
     const id = pet.id;
     this.mesh = createPetMesh(id);
+    this.ninja = this.mesh.userData.ninja || null;
+    // its spin clock: from now for a ninja just hatched, a random place in it for one already here
+    this.ninja?.setAge(from.pop ? 0 : Math.random() * 4.3);
     // block animals come sized for the pen already (bigger at every stage, giants from the fifth);
     // stride: how big it is for walking (how far from the fence, how fast, how high it bobs)
     this.block = !!this.mesh.userData.worldSize;
-    this.size = this.block ? 1 : petSize(pet);
-    this.stride = this.block ? Math.max(1, this.mesh.userData.worldSize / 8) : this.size;
-    this.giant = isGiant(id);
+    this.size = this.block || this.ninja ? 1 : petSize(pet);
+    this.stride = this.ninja ? this.ninja.height / 3 : this.block ? Math.max(1, this.mesh.userData.worldSize / 8) : this.size;
+    this.giant = !this.ninja && isGiant(id);
     this.label = petLabel(pet);
     this.labelHeight = new THREE.Box3().setFromObject(this.mesh).max.y + 2.6;
     parent.add(this.label);
@@ -464,6 +469,7 @@ class Pet {
       return;
     }
     this.mesh.scale.setScalar(this.size);
+    if (this.ninja) return this.moveNinja(dt);
     if (!this.block) return this.moveSimple(dt);
 
     // a block animal walks like an animal: it turns towards where it goes first, speeds up and slows
@@ -502,6 +508,104 @@ class Pet {
     animateBlockAnimal(this.mesh, walk, this.step, this.t);
   }
 
+  // A ninja walks about the pen like a person (arms and legs swinging); every few seconds it turns
+  // into a whirlwind and whirls fast across the pen, then turns back.
+  // Start a fight with another ninja for this long (it fights back).
+  fight(other, seconds) {
+    if (!this.ninja || !other?.ninja || other === this) return;
+    this.foe = other;
+    this.fightLeft = seconds;
+    this.attack = null;
+  }
+
+  // Fighting: close in on the foe, face it and throw moves at it (punch, kick, flying jump kick,
+  // a block now and then); when a move lands the foe staggers back a little.
+  fightNinja(dt) {
+    const foe = this.foe;
+    this.fightLeft -= dt;
+    if (!foe || foe.disposed || this.fightLeft <= 0) {
+      this.foe = null;
+      this.ninja.fighting = false;
+      return false;
+    }
+    this.ninja.fighting = true;
+    const dx = foe.x - this.x, dz = foe.z - this.z;
+    const d = Math.hypot(dx, dz) || 0.01;
+    const reach = this.ninja.height * 0.75;
+    this.mesh.rotation.y = Math.atan2(dx, dz);
+    if (d > reach + 0.4) {
+      // closing in, at a run
+      const step = Math.min(d - reach, 7 * dt);
+      this.x += (dx / d) * step;
+      this.z += (dz / d) * step;
+      this.step = (this.step || 0) + step * 1.6;
+      this.ninja.pose(1, this.step);
+    } else {
+      if (!this.attack || this.attack.t >= 1) {
+        const kinds = ['punch', 'kick', 'jump', 'punch', 'kick', 'block'];
+        this.attack = { kind: kinds[Math.floor(Math.random() * kinds.length)], t: 0, len: 0.45 + Math.random() * 0.35, hit: false };
+      }
+      const mv = this.attack;
+      mv.t = Math.min(1, mv.t + dt / mv.len);
+      this.ninja.fightPose(mv.kind, mv.t);
+      // the move lands halfway: the foe is knocked back a step
+      if (!mv.hit && mv.t > 0.5 && mv.kind !== 'block') {
+        mv.hit = true;
+        const push = mv.kind === 'jump' ? 1.6 : 0.9;
+        foe.x += (dx / d) * push;
+        foe.z += (dz / d) * push;
+        foe.hitT = 0.25;
+      }
+    }
+    // knocked back: a little stagger
+    if (this.hitT > 0) {
+      this.hitT -= dt;
+      this.mesh.rotation.x = -Math.sin(Math.max(0, this.hitT) / 0.25 * Math.PI) * 0.25;
+    } else this.mesh.rotation.x = 0;
+    // stay inside the pen
+    const m = PEN_MARGIN * 0.6;
+    this.x = Math.max(PLOT.petsMinX, Math.min(PLOT.petsMaxX + 20, this.x));
+    this.z = Math.max(-PLOT.penHalfZ + m, Math.min(PLOT.penHalfZ - m, this.z));
+    this.mesh.position.set(this.x, 0, this.z);
+    return true;
+  }
+
+  moveNinja(dt) {
+    if (this.foe && this.fightNinja(dt)) {
+      this.ninja.update(dt); // its power keeps going (it does not spin while it fights)
+      return;
+    }
+    const spinning = this.ninja.update(dt);
+    const top = spinning ? 14 : 3.6;
+    if (spinning && !this.wasSpinning) this.target = randomPenSpot(this.stride); // off it goes
+    this.wasSpinning = spinning;
+    let want = 0;
+    if (!this.target) {
+      this.wait -= dt;
+      if (this.wait <= 0) this.target = randomPenSpot(this.stride);
+    } else {
+      const dx = this.target.x - this.x, dz = this.target.z - this.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.6) {
+        this.target = spinning ? randomPenSpot(this.stride) : null;
+        this.wait = 1.5 + Math.random() * 3;
+      } else {
+        const goal = Math.atan2(dx, dz);
+        const turn = ((goal - this.mesh.rotation.y + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+        this.mesh.rotation.y += turn * Math.min(1, dt * (spinning ? 10 : 5));
+        want = top * Math.min(1, d / 2);
+        const step = Math.min(d, (this.speedNow || 0) * dt);
+        this.x += (dx / d) * step;
+        this.z += (dz / d) * step;
+      }
+    }
+    this.speedNow = (this.speedNow || 0) + (want - (this.speedNow || 0)) * Math.min(1, dt * 4);
+    const walk = spinning ? 0 : Math.min(1, this.speedNow / 3.6);
+    this.step = (this.step || 0) + this.speedNow * dt * 1.6;
+    this.ninja.pose(walk, this.step);
+    this.mesh.position.set(this.x, 0, this.z);
+  }
+
   // the voxel animals (guardians' little versions): hop along as before
   moveSimple(dt) {
     if (!this.target) {
@@ -525,6 +629,7 @@ class Pet {
   }
 
   dispose() {
+    this.disposed = true;
     this.mesh.parent?.remove(this.mesh);
     if (!this.mesh.userData.sharedGeometry) this.mesh.geometry?.dispose();
     this.label.parent?.remove(this.label);
@@ -558,14 +663,21 @@ export class PetPen {
     if (!first && keys.length && overflow >= 0 && older.every((k, i) => known[i + overflow] === k)) {
       for (const entry of this.list.splice(0, overflow)) entry.pet.dispose();
       const pet = pets[pets.length - 1];
-      this.list.push({ key: petKey(pet), pet: new Pet(pet, this.parent, { x: (this.popAt || PetPen.popAt).x, z: (this.popAt || PetPen.popAt).z, pop: true, delay: this.popDelay || 0 }) });
+      const born = new Pet(pet, this.parent, { x: (this.popAt || PetPen.popAt).x, z: (this.popAt || PetPen.popAt).z, pop: true, delay: this.popDelay || 0 });
+      // the ninjas with weapons are angry at the newcomer: some of them pick a fight with it for a while
+      if (born.ninja) {
+        const angry = this.list.map((e) => e.pet).filter((p) => p.ninja?.weapon && Math.random() < 0.75);
+        angry.forEach((p, i) => p.fight(born, 6 + Math.random() * 5 + i));
+        if (angry.length) born.fight(angry[0], 8 + Math.random() * 4);
+      }
+      this.list.push({ key: petKey(pet), pet: born });
       this.popDelay = 0;
       return;
     }
 
     while (this.list.length) this.list.pop().pet.dispose();
     let giants = 0;
-    for (const pet of pets) this.list.push({ key: petKey(pet), pet: new Pet(pet, this.parent, isGiant(pet.id) ? giantSpot(giants++) : randomPenSpot(petSize(pet))) });
+    for (const pet of pets) this.list.push({ key: petKey(pet), pet: new Pet(pet, this.parent, isGiant(pet.id) && !isNinjaPet(pet.id) ? giantSpot(giants++) : randomPenSpot(petSize(pet))) });
   }
 
   clear() {
@@ -575,5 +687,18 @@ export class PetPen {
 
   update(dt) {
     for (const { pet } of this.list) pet.update(dt);
+    // now and then two ninjas with weapons have a little fight of their own
+    this.brawlIn = (this.brawlIn ?? 8 + Math.random() * 8) - dt;
+    if (this.brawlIn <= 0) {
+      this.brawlIn = 12 + Math.random() * 14;
+      const armed = this.list.map((e) => e.pet).filter((p) => p.ninja?.weapon && !p.foe);
+      if (armed.length >= 2) {
+        const a = armed[Math.floor(Math.random() * armed.length)];
+        const b = armed.filter((p) => p !== a)[Math.floor(Math.random() * (armed.length - 1))];
+        const secs = 4 + Math.random() * 3;
+        a.fight(b, secs);
+        b.fight(a, secs);
+      }
+    }
   }
 }

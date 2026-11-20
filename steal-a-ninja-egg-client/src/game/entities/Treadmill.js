@@ -1,341 +1,225 @@
-// The treadmill outside each pen (like the video): a white treadmill with a coloured trim stripe, a
-// black belt with arrows running towards the console, dark handrails with wooden rails, and a gate
-// frame over it with hazard tape and a hanging lantern. A gold display above the console shows the
-// owner's speed, the treadmill's name, its speed per step and what the next upgrade costs.
+// The round training arena outside each pen (like the video; it took the treadmill's place, so saves
+// and messages still call it the treadmill): a low ring wall of cream stone blocks on a dark wooden
+// base, brown and gold blocks standing up round the rim, a yellow band round the outside and a sandy
+// floor with big yellow arrows chasing round it. Stand inside and you spin in a whirlwind, getting
+// faster with every turn (see Player.js and Whirlwind.js).
 //
-// Each upgrade changes it: the starter (Abandoned) treadmill is white and yellow in a wooden frame;
-// every upgrade after that stands in a frame of stone pillars topped with glowing crystals, in that
-// treadmill's own colour. Upgrading sends up a cloud of coloured smoke and the treadmill changes
-// inside it.
+// Each upgrade changes it: the band, the gold blocks and the arrows take the arena's own colour, and
+// from the third arena on glowing crystals stand on the rim. Upgrading sends up a cloud of coloured
+// smoke and the arena changes inside it. A locked arena has rope across its way in.
 
 import * as THREE from 'three';
 import { Voxels } from '../util/bake.js';
-import { canvasTexture, drawOutlinedText, FONT_TITLE, FONT_UI } from '../util/canvasText.js';
-import { TREADMILLS, TREADMILL_BELT, formatNumber, nextTreadmill, treadmillById } from '../../shared/gameData.js';
+import { canvasTexture } from '../util/canvasText.js';
+import { ARENA, TREADMILLS, treadmillById } from '../../shared/gameData.js';
 import { glowMap } from './Effects.js';
 
-const BELT_WIDTH = TREADMILL_BELT.halfX * 2;
-const WIDTH = BELT_WIDTH + 1.4; // across the belt (local x)
-const LENGTH = 13;              // along the belt (local z); the console is at -z
-export const TREADMILL_HALF = { x: WIDTH / 2 + 0.2, z: 7 };
-export { TREADMILL_BELT };
-// the gate frame's posts (local x, either side) and where they stand along the belt
-export const FRAME_POST_X = WIDTH / 2 + 2.6;
-export const FRAME_Z = 1.5;
-export const FRAME_HEIGHT = 15;
-const DEFAULT_TRIM = '#ffd21f';
-const WHITE = '#f4f3ee';
-const METAL = '#3e4656';
-const METAL_LIGHT = '#5a6478';
-const WOOD = ['#7a3a1e', '#8c4626', '#6a321a'];
-const STONE = ['#8d9196', '#7b7f85', '#9ea2a7', '#6f7378'];
-const BELT_SPEED = 1.2;
+const SEGMENTS = 28;              // blocks round the ring wall
+const WALL_R = (ARENA.floor + ARENA.wall) / 2;
+const WALL_T = ARENA.wall - ARENA.floor;
+const H = ARENA.height;
 const SMOKE_SECONDS = 2.8;
-const SWAP_AT = 0.55;           // the treadmill changes this long into the smoke
+const SWAP_AT = 0.55;             // the arena changes this long into the smoke
 const SMOKE_PUFFS = 44;
-// the thick smoke that billows out of both sides of a working treadmill and rises: white mixed with
-// the treadmill's own colour (yellow for the starter), so it changes colour with every upgrade.
-// Kept to a few big puffs (sprites) rather than many small ones, so it looks full without costing much.
-const AMBIENT_PUFFS = 32;
-const AMBIENT_WHITE = new THREE.Color('#ffffff');
-// the starter's yellow, then the trim colour, always made rich and bright: full of colour, and neither
-// so dark (the Void's) nor so pale (the Bone's) that it reads as grey or white smoke
-// where the trim colour would give the same smoke as another treadmill, its own smoke colour, so every
-// upgrade visibly changes it (Bone would be the starter's yellow, Void the Nightmare's purple)
-const SMOKE_COLOR = { bone: '#7dff6a', void: '#e02cff' };
-const _hsl = {};
-const smokeTint = (id) => {
-  const c = new THREE.Color(tierOf(id) <= 1 ? '#ffd21f' : SMOKE_COLOR[treadmillById(id).id] || trimOf(id));
-  c.getHSL(_hsl);
-  c.setHSL(_hsl.h, Math.max(_hsl.s, 0.9), Math.min(0.6, Math.max(0.5, _hsl.l)));
-  return c;
-};
+const WHITE = new THREE.Color('#ffffff');
 
 const tierOf = (id) => Math.max(0, TREADMILLS.indexOf(treadmillById(id)));
-// the colour of a treadmill's trim, belt arrows and lantern
-const trimOf = (id) => (tierOf(id) <= 1 ? DEFAULT_TRIM : treadmillById(id).color || DEFAULT_TRIM);
+// the arena's colour: the band, the gold blocks, the floor arrows (gold for the first one)
+export const arenaColor = (id) => treadmillById(id).color || '#ffd21f';
 const mix = (a, b, k) => `#${new THREE.Color(a).lerp(new THREE.Color(b), k).getHexString()}`;
 
-function beltTexture(color) {
+// angle of a ring position in the arena's own frame (x = cos, z = sin), and is it in the doorway?
+// four ways in, evenly round the ring (the first one facing the pen's gate)
+export const ARENA_DOORS = [0, 1, 2, 3].map((k) => ARENA.door + (k * Math.PI) / 2);
+const inDoor = (a) => ARENA_DOORS.some((door) => {
+  const d = Math.abs(((a - door) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI);
+  return d < ARENA.doorHalf;
+});
+
+// The places of the wall's blocks (for PlayerBase's colliders): [x, z] round the ring, none in the door.
+export function arenaWallBlocks() {
+  const out = [];
+  for (let i = 0; i < SEGMENTS; i++) {
+    const a = (i / SEGMENTS) * Math.PI * 2;
+    if (!inDoor(a)) out.push([Math.cos(a) * WALL_R, Math.sin(a) * WALL_R]);
+  }
+  return out;
+}
+export const ARENA_BLOCK = 1.7; // a wall block's collider size (plot units)
+
+// Every arena level has its own look (like the video, where each upgrade changes the colours):
+//   stone / cap: the ring wall's blocks; ring: the thick outer ring round its foot; band: the stripe
+//   round it; post: the pillars standing up on the rim; lamp: a light on each pillar; plant: what grows
+//   round it; floor / target / dash: the floor's colour, the target in its middle, the dashed track.
+const STYLES = [
+  // 0 locked: plain wood and dull sand
+  { bubble: '#c8b48a', stone: ['#d8c8a8', '#ccbc9a'], cap: '#bca880', ring: '#6e3e22', band: '#8a6a4a', post: '#5a321b', lamp: false, plant: null, floor: '#cdbd9c', target: '#8a6a4a', dash: '#a8987a' },
+  // 1 Wooden: cream stone on a dark wooden ring, gold trim
+  { bubble: '#ffd21f', stone: ['#efdcb2', '#e2c998', '#d9bc86'], cap: '#cfae74', ring: '#6e3e22', band: '#ffd21f', post: '#7a4a26', lamp: false, plant: null, floor: '#e8cf9c', target: '#7a4a26', dash: '#ffd21f' },
+  // 2 Bamboo (the video's): pale stone on a red ring with a yellow band, red pillars with lamps, bamboo
+  { bubble: '#ff3a3a', stone: ['#f4ede0', '#ebe2d0'], cap: '#e0d6c0', ring: '#d6202e', band: '#ffd21f', post: '#d6202e', lamp: true, plant: 'bamboo', floor: '#f4efe2', target: '#d6202e', dash: '#ffd21f' },
+  // 3 Purple Blossom (the second upgrade): lilac stone on a deep purple ring, purple pillars, purple blossom trees
+  { bubble: '#b05aff', stone: ['#f4ecff', '#e8dafa'], cap: '#d4c0f0', ring: '#6a22b8', band: '#e0c8ff', post: '#9a3aff', lamp: true, plant: 'blossom', bloom: ['#b878ff', '#e0c4ff'], floor: '#f4ecfc', target: '#8a3ae0', dash: '#c89aff' },
+  // 4 Golden Temple (the third upgrade): golden stone on a bronze ring, gold pillars, glowing yellow crystals
+  { bubble: '#ffd21f', stone: ['#ffe68a', '#f6d86c'], cap: '#e8c24a', ring: '#a8781a', band: '#fff27a', post: '#d8a01a', lamp: true, plant: 'crystal', crystal: '#ffe14a', floor: '#fff4c8', target: '#d89a1a', dash: '#ffd21f' },
+  // 5 Fire Dragon: dark stone, red ring, black pillars, fire spikes
+  { bubble: '#ff5a1a', stone: ['#4a3a38', '#3a2e2c'], cap: '#2a1e1c', ring: '#ff3a1a', band: '#ffcc33', post: '#1e1414', lamp: true, plant: 'flame', floor: '#5a3a30', target: '#ff3a1a', dash: '#ffcc33' },
+  // 6 Ice Peak: white ice, pale blue ring, ice shards
+  { bubble: '#9be8ff', stone: ['#f4fbff', '#e2f2fc'], cap: '#c8e8f8', ring: '#6ac8f0', band: '#ffffff', post: '#9be8ff', lamp: true, plant: 'ice', floor: '#eaf6fc', target: '#3aa8e0', dash: '#9be8ff' },
+];
+const styleOf = (id) => STYLES[Math.min(STYLES.length - 1, tierOf(id))];
+
+// The floor: studs, the dashed track, chevrons that turn with the spin, the target in the middle.
+function floorTexture(st) {
   const c = document.createElement('canvas');
-  c.width = 64;
-  c.height = 128;
+  c.width = c.height = 512;
   const g = c.getContext('2d');
-  g.fillStyle = '#26282e';
-  g.fillRect(0, 0, 64, 128);
-  g.strokeStyle = color;
+  g.fillStyle = st.floor;
+  g.fillRect(0, 0, 512, 512);
+  g.fillStyle = 'rgba(0,0,0,0.06)';
+  for (let x = 16; x < 512; x += 32) for (let y = 16; y < 512; y += 32) { g.beginPath(); g.arc(x, y, 7, 0, Math.PI * 2); g.fill(); }
+  g.strokeStyle = 'rgba(0,0,0,0.12)';
+  g.lineWidth = 6;
+  for (const r of [236, 200]) { g.beginPath(); g.arc(256, 256, r, 0, Math.PI * 2); g.stroke(); }
+  g.strokeStyle = st.dash;
   g.lineWidth = 10;
-  g.lineJoin = 'miter';
-  for (const y of [32, 96]) {
+  g.setLineDash([26, 30]);
+  g.beginPath(); g.arc(256, 256, 214, 0, Math.PI * 2); g.stroke();
+  g.setLineDash([]);
+  g.fillStyle = st.dash;
+  g.strokeStyle = 'rgba(0,0,0,0.45)';
+  g.lineWidth = 6;
+  for (let k = 0; k < 3; k++) {
+    const a = (k / 3) * Math.PI * 2;
+    g.save();
+    g.translate(256 + Math.cos(a) * 140, 256 + Math.sin(a) * 140);
+    g.rotate(a + Math.PI / 2);
     g.beginPath();
-    g.moveTo(10, y + 15);
-    g.lineTo(32, y - 15);
-    g.lineTo(54, y + 15);
-    g.stroke();
-  }
-  const t = canvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(1, 2);
-  return t;
-}
-
-// ------------------------------------------------------------------ the body
-
-function addBody(v, id) {
-  const tier = tierOf(id);
-  const trim = trimOf(id);
-  const base = tier <= 1 ? WHITE : mix(WHITE, trim, 0.18);
-  // the deck: white, with a trim stripe all round and dark vents along the sides
-  v.box(0, 0, 0, WIDTH, 0.7, LENGTH, '#2c2f36');
-  v.box(0, 0.35, 0, WIDTH + 0.4, 0.75, LENGTH - 0.6, base);
-  for (const s of [-1, 1]) {
-    v.box(s * (WIDTH / 2 + 0.22), 0.55, 0, 0.1, 0.32, LENGTH - 0.8, trim);
-    for (let k = -2; k <= 2; k++) v.box(s * (WIDTH / 2 + 0.23), 0.5, k * 2.2, 0.08, 0.18, 1.2, '#2c2f36');
-  }
-  v.box(0, 0.55, LENGTH / 2 - 0.25, WIDTH + 0.42, 0.32, 0.1, trim);
-  v.box(0, 1.1, 0, BELT_WIDTH, 0.12, LENGTH - 1, '#26282e');
-  // the console end: a raised white block with the belt's motor cover
-  v.box(0, 1.1, -LENGTH / 2 + 0.9, WIDTH, 1.2, 1.8, base);
-  v.box(0, 2.3, -LENGTH / 2 + 0.9, WIDTH - 1, 0.25, 1.4, trim);
-  // the uprights and the console bar
-  for (const s of [-1, 1]) {
-    v.box(s * (WIDTH / 2 - 0.4), 1.1, -LENGTH / 2 + 1.4, 0.7, 6.4, 0.7, METAL, { rx: 0.18 });
-    // the handrails along the sides: dark metal posts, a wooden rail on top
-    for (const z of [-3.2, 0.4, 4]) v.box(s * (WIDTH / 2 - 0.15), 1.1, z, 0.55, 3.6, 0.55, METAL);
-    v.box(s * (WIDTH / 2 - 0.15), 4.7, 0.4, 0.5, 0.35, 9, METAL_LIGHT);
-    v.box(s * (WIDTH / 2 + 0.2), 3.2, 0.4, 0.5, 0.55, 9.6, WOOD[1]);
-  }
-  v.box(0, 7.1, -LENGTH / 2 + 2.3, WIDTH, 0.7, 0.8, METAL_LIGHT);
-  v.box(0, 6.7, -LENGTH / 2 + 2.0, WIDTH - 2, 1.4, 0.6, '#2c2f36', { rx: 0.4 });
-  // the console's little lights, in the trim colour and white
-  for (let k = 0; k < 5; k++) v.box(-3.2 + k * 1.6, 7.25, -LENGTH / 2 + 2.62, 0.7, 0.3, 0.12, k % 2 ? '#ffffff' : trim);
-}
-
-// The gate frame: wood for the starter (and a locked) treadmill, stone pillars for every upgrade.
-function addFrame(v, glow, id) {
-  const tier = tierOf(id);
-  const trim = trimOf(id);
-  const px = FRAME_POST_X, z = FRAME_Z, h = FRAME_HEIGHT;
-  if (tier <= 1) {
-    for (const s of [-1, 1]) {
-      v.box(s * px, 0, z, 2.1, h, 2.1, WOOD[0]);
-      v.box(s * px + s * 0.1, 0, z, 2.6, 0.8, 2.6, WOOD[2]);
-      // a diagonal brace
-      v.box(s * (px - 1.6), h - 4.2, z, 0.7, 4, 0.7, WOOD[2], { rz: s * 0.7 });
-      // traffic cones by the posts
-      v.box(s * (px + 2.4), 0, z + 2.5, 1.6, 0.25, 1.6, '#e8641a');
-      v.box(s * (px + 2.4), 0.25, z + 2.5, 1, 1.6, 1, '#ff7a1a');
-      v.box(s * (px + 2.4), 1.0, z + 2.5, 1.05, 0.35, 1.05, '#ffffff');
-    }
-    v.box(0, h, z, px * 2 + 3, 2.2, 2.4, WOOD[1]);
-    v.box(0, h + 2.2, z, px * 2 + 4, 0.5, 2.8, WOOD[2]);
-    // hazard tape swinging under the beam (two crossed strips)
-    for (const s of [-1, 1]) {
-      for (let k = 0; k < 8; k++) {
-        const t = (k + 0.5) / 8;
-        v.box(-px + 1 + t * (px * 2 - 2), h - 1.4 - s * (t - 0.5) * 3.2, z + s * 0.3, (px * 2 - 2) / 8 + 0.05, 0.6, 0.12,
-          k % 2 ? '#14141a' : '#ffd21f', { rz: s * 0.2 });
-      }
-    }
-    // a few planks lying about
-    v.box(px + 5, 0, z - 4, 1.2, 0.3, 5, WOOD[1], { ry: 0.4 });
-    v.box(px + 6.4, 0, z - 3, 1.2, 0.3, 4.4, WOOD[2], { ry: 0.25 });
-  } else {
-    for (const s of [-1, 1]) {
-      // a pillar of stone blocks with a stepped plinth and a capital
-      v.box(s * px, 0, z, 3.6, 1.4, 3.6, STONE[3]);
-      for (let y = 1.4, row = 0; y < h; y += 2.4, row++) v.box(s * px, y, z, 2.8 + (row % 2) * 0.3, Math.min(2.3, h - y), 2.8 + ((row + 1) % 2) * 0.3, STONE[row % STONE.length]);
-      v.box(s * px, h, z, 3.8, 1, 3.8, STONE[2]);
-      // the glowing crystal on top, in the treadmill's colour
-      glow.box(s * px, h + 1, z, 1.6, 2.6, 1.6, trim, { ry: 0.785 });
-      glow.box(s * px, h + 3.4, z, 0.9, 1.4, 0.9, mix(trim, '#ffffff', 0.5), { ry: 0.785 });
-    }
-    v.box(0, h - 0.6, z, px * 2 - 1, 1.6, 1.8, STONE[1]);
-    // a band of the treadmill's colour across the lintel
-    glow.box(0, h - 0.3, z + 0.92, px * 2 - 3, 0.5, 0.06, trim);
-  }
-  // the chain and the lantern, hanging to one side so the display stays in view
-  const lx = px * 0.62;
-  v.box(lx, h - 3.2, z, 0.3, 3.2, 0.3, '#9aa1a8');
-  v.box(lx, h - 5.4, z, 1.6, 0.4, 1.6, '#2a2a30');
-  glow.box(lx, h - 5, z, 1.1, 1.4, 1.1, tier <= 1 ? '#ffe9a0' : mix(trim, '#ffffff', 0.4));
-  v.box(lx, h - 3.6, z, 1.7, 0.4, 1.7, '#2a2a30');
-  // locked: tape strung across the belt as well
-  if (tier === 0) {
-    for (const s of [-1, 1]) {
-      for (let k = 0; k < 7; k++) {
-        const t = (k + 0.5) / 7;
-        v.box(-WIDTH / 2 + t * WIDTH, 2.6 + s * (t - 0.5) * 2.4, z + 0.4, WIDTH / 7 + 0.05, 0.6, 0.12, k % 2 ? '#14141a' : '#ffd21f', { rz: -s * 0.3 });
-      }
-    }
-  }
-}
-
-// ------------------------------------------------------------------ the display
-
-const DISPLAY_W = 512, DISPLAY_H = 256;
-function drawDisplay(g, { id, speed, owned }) {
-  const mill = treadmillById(id);
-  const next = nextTreadmill(id);
-  const trim = trimOf(id);
-  // a gold screen with a dark bevel
-  const grad = g.createLinearGradient(0, 0, 0, DISPLAY_H);
-  grad.addColorStop(0, '#ffe07a');
-  grad.addColorStop(1, '#d99a1a');
-  g.fillStyle = '#2a1c06';
-  g.fillRect(0, 0, DISPLAY_W, DISPLAY_H);
-  g.fillStyle = grad;
-  g.fillRect(8, 8, DISPLAY_W - 16, DISPLAY_H - 16);
-  g.fillStyle = 'rgba(255,255,255,0.25)';
-  g.fillRect(8, 8, DISPLAY_W - 16, 26);
-  if (!owned) {
-    drawOutlinedText(g, 'EMPTY BASE', DISPLAY_W / 2, DISPLAY_H / 2, { size: 70, fill: '#ffffff', stroke: '#3a2400', strokeWidth: 10, font: FONT_TITLE, weight: 400, glow: false });
-    return;
-  }
-  drawOutlinedText(g, `⚡ ${formatNumber(speed)}`, DISPLAY_W / 2, 72, { size: 86, fill: '#ffffff', stroke: '#3a2400', strokeWidth: 12, font: FONT_TITLE, weight: 400, glow: false });
-  const line = mill.gain ? `${mill.name}  +${formatNumber(mill.gain)}/step` : 'LOCKED';
-  drawOutlinedText(g, line, DISPLAY_W / 2, 140, { size: 34, fill: mill.gain ? '#3a2400' : '#c81e2a', stroke: null, font: FONT_UI, weight: 700, glow: false });
-  // the bottom strip: what the next upgrade costs
-  g.fillStyle = next ? '#c81e2a' : '#2fa83a';
-  g.fillRect(22, 172, DISPLAY_W - 44, 64);
-  const text = next ? `${mill.gain ? 'UPGRADE' : 'UNLOCK'}: $${formatNumber(next.price)}` : 'MAX LEVEL!';
-  drawOutlinedText(g, text, DISPLAY_W / 2, 205, { size: 46, fill: '#ffffff', stroke: '#3a0a0a', strokeWidth: 8, font: FONT_TITLE, weight: 400, glow: false });
-  // little arrows in the trim colour, like the video's display
-  g.fillStyle = trim;
-  for (let k = 0; k < 6; k++) {
-    const x = 40 + k * 14;
-    g.beginPath();
-    g.moveTo(x, 150); g.lineTo(x + 9, 157); g.lineTo(x, 164);
+    g.moveTo(-50, -26); g.lineTo(0, 26); g.lineTo(50, -26); g.lineTo(50, 4); g.lineTo(0, 56); g.lineTo(-50, 4);
+    g.closePath();
     g.fill();
+    g.stroke();
+    g.restore();
+  }
+  // the target: a ring, a gap, a dot
+  g.fillStyle = st.target;
+  g.beginPath(); g.arc(256, 256, 74, 0, Math.PI * 2); g.fill();
+  g.fillStyle = st.floor;
+  g.beginPath(); g.arc(256, 256, 48, 0, Math.PI * 2); g.fill();
+  g.fillStyle = st.target;
+  g.beginPath(); g.arc(256, 256, 22, 0, Math.PI * 2); g.fill();
+  return canvasTexture(c);
+}
+
+// What grows round the arena, at a point outside the ring.
+function plantAt(v, glow, kind, x, z, rnd, st = {}) {
+  if (kind === 'bamboo') {
+    for (const [dx, dz, h] of [[0, 0, 4.6], [0.7, 0.4, 3.6], [-0.5, 0.6, 3.0]]) {
+      for (let y = 0; y < h; y += 1.2) {
+        v.box(x + dx, y, z + dz, 0.55, Math.min(1.15, h - y), 0.55, '#3fae3a');
+        v.box(x + dx, y + 1.1, z + dz, 0.62, 0.1, 0.62, '#2a8a2a');
+      }
+    }
+  } else if (kind === 'blossom') {
+    v.box(x, 0, z, 0.5, 2.6, 0.5, '#6a3a2a');
+    const [bloom, light] = st.bloom || ['#ff9ac8', '#ffc8e0'];
+    v.box(x, 2.4, z, 2.6, 1.2, 2.4, bloom, { ry: rnd() });
+    v.box(x + 0.3, 3.3, z - 0.2, 1.8, 0.9, 1.8, light, { ry: rnd() });
+  } else if (kind === 'crystal') {
+    for (const [dx, dz, h, rz] of [[0, 0, 3.2, 0], [0.6, 0.3, 2.2, 0.35], [-0.6, 0.2, 2.0, -0.35]]) glow.box(x + dx, 0, z + dz, 0.7, h, 0.7, st.crystal || '#8ae8ff', { rz, ry: 0.785 });
+  } else if (kind === 'flame') {
+    for (const [dx, dz, h] of [[0, 0, 2.8], [0.6, 0.3, 1.9], [-0.5, 0.4, 1.6]]) {
+      glow.box(x + dx, 0, z + dz, 0.8, h, 0.8, '#ff5a1a', { ry: 0.785 });
+      glow.box(x + dx, 0, z + dz, 0.4, h * 0.7, 0.4, '#ffd23a', { ry: 0.785 });
+    }
+  } else if (kind === 'ice') {
+    for (const [dx, dz, h, rz] of [[0, 0, 3.4, 0.1], [0.7, 0.2, 2.4, 0.4], [-0.6, 0.4, 2.0, -0.4]]) v.box(x + dx, 0, z + dz, 0.8, h, 0.8, '#d8f4ff', { rz, ry: 0.785 });
   }
 }
 
-// ------------------------------------------------------------------ the view
+function addRing(v, glow, id) {
+  const tier = tierOf(id);
+  const st = styleOf(id);
+  const locked = tier === 0;
+  const rnd = (() => { let s = 7; return () => ((s = (s * 16807) % 2147483647) / 2147483647); })();
+  // the thick outer ring round its foot (the arena's colour), a band round it, a second ring below
+  for (let i = 0; i < SEGMENTS; i++) {
+    const a = (i / SEGMENTS) * Math.PI * 2;
+    const ry = -a;
+    v.box(Math.cos(a) * (ARENA.wall + 0.5), 0, Math.sin(a) * (ARENA.wall + 0.5), 2.0, 0.5, 1.95, mix(st.ring, '#000000', 0.25), { ry });
+    v.box(Math.cos(a) * (ARENA.wall + 0.25), 0.5, Math.sin(a) * (ARENA.wall + 0.25), 1.5, 0.35, 1.85, st.band, { ry });
+    v.box(Math.cos(a) * (ARENA.wall - 0.4), 0, Math.sin(a) * (ARENA.wall - 0.4), 1.5, H, 1.7, st.ring, { ry });
+  }
+  for (let i = 0; i < SEGMENTS; i++) {
+    const a = (i / SEGMENTS) * Math.PI * 2;
+    if (inDoor(a)) continue;
+    const x = Math.cos(a) * WALL_R, z = Math.sin(a) * WALL_R, ry = -a;
+    // the wall: a ring-coloured brick course under stone blocks with a cap
+    v.box(x, 0, z, WALL_T + 0.1, 0.8, 1.66, st.ring, { ry });
+    v.box(x, 0.8, z, WALL_T, ARENA.wallHeight - 0.8, 1.62, st.stone[i % st.stone.length], { ry });
+    v.box(x, ARENA.wallHeight, z, WALL_T + 0.2, 0.28, 1.7, st.cap, { ry });
+    // pillars standing up on the rim, every few blocks, with a light on top from the second arena on
+    if (i % 4 === 0) {
+      v.box(x, ARENA.wallHeight + 0.28, z, 1.1, 1.8, 1.1, st.post, { ry });
+      if (st.lamp) glow.box(x, ARENA.wallHeight + 2.08, z, 0.8, 0.6, 0.8, '#fffbe8', { ry });
+      else v.box(x, ARENA.wallHeight + 2.08, z, 1.2, 0.3, 1.2, st.band, { ry });
+    }
+    // what grows round it, outside the ring
+    if (st.plant && i % 7 === 3 && !inDoor(a + Math.PI / SEGMENTS)) plantAt(v, glow, st.plant, Math.cos(a) * (ARENA.wall + 2.2), Math.sin(a) * (ARENA.wall + 2.2), rnd, st);
+  }
+  // every doorway: two posts with caps, a step down into the arena
+  for (const door of ARENA_DOORS) {
+  for (const s of [-1, 1]) {
+    const a = door + s * (ARENA.doorHalf + 0.06);
+    const x = Math.cos(a) * WALL_R, z = Math.sin(a) * WALL_R;
+    v.box(x, 0, z, 1.4, ARENA.wallHeight + 1.1, 1.4, st.post, { ry: -a });
+    v.box(x, ARENA.wallHeight + 1.1, z, 1.6, 0.5, 1.6, st.band, { ry: -a });
+  }
+  const sx = Math.cos(door) * (ARENA.wall + 0.9), sz = Math.sin(door) * (ARENA.wall + 0.9);
+  v.box(sx, 0, sz, 1.6, H * 0.5, 3.4, st.cap, { ry: -door });
+  if (locked) {
+    // rope across the way in, with a red tag
+    const a0 = door - ARENA.doorHalf, a1 = door + ARENA.doorHalf;
+    const p0 = [Math.cos(a0) * WALL_R, Math.sin(a0) * WALL_R], p1 = [Math.cos(a1) * WALL_R, Math.sin(a1) * WALL_R];
+    const len = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+    const ry = -Math.atan2(p1[1] - p0[1], p1[0] - p0[0]);
+    for (const y of [1.0, 2.0]) v.box((p0[0] + p1[0]) / 2, y, (p0[1] + p1[1]) / 2, len, 0.22, 0.22, '#c8a060', { ry });
+    v.box((p0[0] + p1[0]) / 2, 1.2, (p0[1] + p1[1]) / 2, 0.9, 0.7, 0.3, '#d6283a', { ry });
+  }
+  }
+}
+
+// A see-through bubble of the arena's colour over it (a dome, clear in the middle, coloured at its
+// edge), a little wider than the arena and its plants so it never reaches the pen's fence.
+export const BUBBLE_R = ARENA.wall + 3.4;
+function bubble(color) {
+  const material = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(color) } },
+    vertexShader: `varying vec3 vN; varying vec3 vV;
+      void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `varying vec3 vN; varying vec3 vV; uniform vec3 uColor;
+      void main() { float rim = pow(1.0 - abs(dot(vN, vV)), 2.2); gl_FragColor = vec4(mix(uColor, vec3(1.0), rim * 0.3), 0.06 + rim * 0.42); }`,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(BUBBLE_R, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2), material);
+  mesh.renderOrder = 4;
+  return mesh;
+}
 
 export class TreadmillView {
-  static fancy = false; // a smooth frame rate and a good connection: the smoke spirals, with magic dust
+  static fancy = false; // a smooth frame rate and a good connection: thicker smoke when it upgrades
   constructor(parent, x, z) {
     this.group = new THREE.Group();
     this.group.position.set(x, 0, z);
     parent.add(this.group);
     this.model = null;
     this.id = null;
-
-    // the display above the console, one face each way
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = DISPLAY_W;
-    this.canvas.height = DISPLAY_H;
-    this.texture = canvasTexture(this.canvas);
-    const material = new THREE.MeshBasicMaterial({ map: this.texture });
-    const frame = new Voxels();
-    frame.box(0, -0.3, 0, 8.4, 4.8, 0.5, '#3a2a10');
-    frame.box(0, -1.3, -0.4, 0.6, 1.4, 0.6, METAL);
-    this.display = new THREE.Group();
-    this.display.add(frame.mesh({ castShadow: false }));
-    for (const s of [1, -1]) {
-      const face = new THREE.Mesh(new THREE.PlaneGeometry(8, 4), material);
-      face.position.set(0, 2.1, s * 0.27);
-      face.rotation.y = s > 0 ? 0 : Math.PI;
-      this.display.add(face);
-    }
-    this.display.position.set(0, 8.4, -LENGTH / 2 + 2.3);
-    this.group.add(this.display);
-    this.displayKey = '';
-    this.displayAt = -1;
-
     this.smoke = [];
     this.time = 0;
-
-    this.ambient = new THREE.Group();
-    this.group.add(this.ambient);
-    this.ambientPuffs = [];
-    this.smokeColor = smokeTint('none');
-    for (let i = 0; i < AMBIENT_PUFFS; i++) {
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowMap(), transparent: true, depthWrite: false, opacity: 0 }));
-      sprite.renderOrder = 5;
-      const p = { sprite, vel: new THREE.Vector3(), side: i % 2 ? 1 : -1 };
-      this.respawnAmbient(p);
-      p.age = Math.random() * p.life; // staggered so it doesn't all puff at once
-      this.ambient.add(sprite);
-      this.ambientPuffs.push(p);
-    }
-    this.ambient.visible = false;
+    this.spin = 0;
   }
 
-  // Puts an ambient smoke puff back at a random spot along one of the treadmill's two long sides.
-  // Puffs alternate sides (by index) so both sides always have the same amount of smoke.
-  respawnAmbient(p) {
-    const side = p.side;
-    const x = side * (WIDTH / 2 + 0.4);
-    const z = (Math.random() - 0.5) * (LENGTH - 1);
-    p.sprite.position.set(x, 0.8 + Math.random() * 0.8, z);
-    // out of the side and up into a big rising cloud
-    const out = 1.6 + Math.random() * 1.6;
-    p.vel.set(side * out, 2 + Math.random() * 2, (Math.random() - 0.5) * 0.8);
-    p.tint = 0.7 + Math.random() * 0.3; // how much of the treadmill's colour (the rest is white): mostly colour
-    this.tintPuff(p);
-    p.size = 7 + Math.random() * 5;
-    p.spin = (Math.random() - 0.5) * 0.8;
-    p.life = 3.2 + Math.random() * 1.8;
-    p.age = 0;
-    // for the spiral: where round the treadmill it starts
-    p.angle = side > 0 ? 0 : Math.PI;
-    p.angle += (Math.random() - 0.5) * 1.2;
-    p.rise = 3 + Math.random() * 2;
-  }
-
-  tintPuff(p) {
-    p.sprite.material.color.copy(AMBIENT_WHITE).lerp(this.smokeColor, p.tint);
-  }
-
-  // Magic dust spiralling up round the treadmill with the smoke (fancy only): one Points per treadmill.
-  updateDust(dt) {
-    const on = this.running && TreadmillView.fancy && this.ambient.visible !== false;
-    if (!on) { if (this.dust) this.dust.visible = false; return; }
-    const N = 70;
-    if (!this.dust) {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
-      this.dust = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.9, map: glowMap(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.9 }));
-      this.dust.frustumCulled = false;
-      this.group.add(this.dust);
-      this.grains = Array.from({ length: N }, (_, i) => ({ a: (i / N) * Math.PI * 2, t: Math.random() * 3 }));
-    }
-    this.dust.visible = true;
-    this.dust.material.color.copy(this.smokeColor).lerp(AMBIENT_WHITE, 0.1);
-    const pos = this.dust.geometry.attributes.position;
-    for (let i = 0; i < N; i++) {
-      const g = this.grains[i];
-      g.t = (g.t + dt) % 3;
-      const a = g.a + g.t * 2.4;
-      const r = WIDTH / 2 + 0.6 + g.t * 0.9;
-      pos.setXYZ(i, Math.cos(a) * r, 0.6 + g.t * 4.5, Math.sin(a) * r * 1.35);
-    }
-    pos.needsUpdate = true;
-  }
-
-  updateAmbient(dt) {
-    this.ambient.visible = !!this.running;
-    this.updateDust(dt);
-    if (!this.running) return;
-    const spiral = TreadmillView.fancy;
-    for (const p of this.ambientPuffs) {
-      p.age += dt;
-      if (p.age >= p.life) this.respawnAmbient(p);
-      const k = p.age / p.life;
-      if (spiral) {
-        // round and round the treadmill as it rises, widening: a whirl of smoke
-        p.angle += dt * (1.6 - k * 0.6);
-        const r = WIDTH / 2 + 1 + k * 4;
-        p.sprite.position.set(Math.cos(p.angle) * r, 0.8 + p.rise * p.age, Math.sin(p.angle) * r * 1.35);
-      } else p.sprite.position.addScaledVector(p.vel, dt * (1 - k * 0.7)); // slows as it spreads
-      p.sprite.scale.setScalar(p.size * (0.6 + k * 1.6));
-      p.sprite.material.rotation += p.spin * dt;
-      p.sprite.material.opacity = Math.min(1, k / 0.2) * Math.min(1, (1 - k) / 0.4) * 0.92; // quick fade-in, slow fade-out
-    }
-  }
-
-  // Builds the model for this treadmill (and drops the old one).
+  // Builds the model for this arena (and drops the old one).
   build(id) {
     if (this.model) {
       this.group.remove(this.model);
@@ -343,57 +227,54 @@ export class TreadmillView {
     }
     const v = new Voxels();
     const glow = new Voxels();
-    addBody(v, id);
-    addFrame(v, glow, id);
+    addRing(v, glow, id);
     this.model = new THREE.Group();
     this.model.add(v.mesh());
     this.model.add(new THREE.Mesh(glow.geometry(), new THREE.MeshBasicMaterial({ vertexColors: true })));
-    this.beltTexture?.dispose();
-    this.beltTexture = beltTexture(trimOf(id));
-    const belt = new THREE.Mesh(new THREE.PlaneGeometry(BELT_WIDTH - 0.2, LENGTH - 1.4), new THREE.MeshLambertMaterial({ map: this.beltTexture }));
-    belt.rotation.x = -Math.PI / 2;
-    belt.position.y = TREADMILL_BELT.height;
-    belt.receiveShadow = true;
-    this.model.add(belt);
+    this.floorTexture?.dispose();
+    this.floorTexture = floorTexture(styleOf(id));
+    this.floorTexture.center.set(0.5, 0.5);
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(ARENA.floor + 0.35, 48), new THREE.MeshLambertMaterial({ map: this.floorTexture }));
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = H + 0.01;
+    floor.receiveShadow = true;
+    this.model.add(floor);
+    // the bubble of the arena's colour over it (once it is unlocked)
+    // the see-through bubble over it, in the arena's own colour (every arena, the first one too)
+    const st = styleOf(id);
+    this.model.add(bubble(st.bubble));
+    this.setDust(st.bubble, tierOf(id) > 0);
     this.group.add(this.model);
     this.running = treadmillById(id).gain > 0;
-    // the side smoke takes the new treadmill's colour at once (this happens inside the upgrade cloud)
-    this.smokeColor.copy(smokeTint(id));
-    for (const p of this.ambientPuffs) this.tintPuff(p);
   }
 
   // state: the owner's player state (null for a free pen)
   sync(state) {
     const id = state?.treadmill || 'none';
-    if (id !== this.id) {
-      const upgraded = this.id !== null && state && tierOf(id) > tierOf(this.id);
-      this.id = id;
-      if (upgraded) this.puff(smokeTint(id)); // the model is swapped inside the smoke (see update)
-      else this.build(id);
-    }
-    // the display: redrawn when what it shows changes, at most 4 times a second
-    const key = `${id}|${state ? formatNumber(state.speed) : '-'}`;
-    if (key !== this.displayKey && (this.displayKey === '' || this.time - this.displayAt > 0.25)) {
-      this.displayKey = key;
-      this.displayAt = this.time;
-      drawDisplay(this.canvas.getContext('2d'), { id, speed: state?.speed || 0, owned: !!state });
-      this.texture.needsUpdate = true;
-    }
+    if (id === this.id) return;
+    const upgraded = this.id !== null && state && tierOf(id) > tierOf(this.id);
+    this.id = id;
+    if (upgraded) this.puff(arenaColor(id)); // the model is swapped inside the smoke (see update)
+    else this.build(id);
   }
 
-  // A cloud of coloured smoke rising off the treadmill.
+  // The owner is spinning in it: the floor's arrows turn faster.
+  setSpinning(on) { this.spinning = on; }
+
+  // A cloud of coloured smoke rising off the arena.
   puff(color) {
     this.smokeT = 0;
     this.pendingBuild = true;
     for (const s of this.smoke) this.group.remove(s.sprite);
     this.smoke = [];
     const tint = new THREE.Color(color);
-    for (let i = 0; i < SMOKE_PUFFS; i++) {
-      const c = tint.clone().lerp(AMBIENT_WHITE, Math.random() * 0.12);
+    const n = TreadmillView.fancy ? SMOKE_PUFFS : SMOKE_PUFFS / 2;
+    for (let i = 0; i < n; i++) {
+      const c = tint.clone().lerp(WHITE, Math.random() * 0.25);
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowMap(), color: c, transparent: true, depthWrite: false, opacity: 0 }));
       sprite.renderOrder = 6;
-      const a = Math.random() * Math.PI * 2, r = Math.random() * 4.5;
-      sprite.position.set(Math.cos(a) * r, 1 + Math.random() * 2, Math.sin(a) * r * 1.3);
+      const a = Math.random() * Math.PI * 2, r = Math.random() * ARENA.wall;
+      sprite.position.set(Math.cos(a) * r, 1 + Math.random() * 2, Math.sin(a) * r);
       this.group.add(sprite);
       this.smoke.push({
         sprite, delay: Math.random() * 0.5,
@@ -403,10 +284,55 @@ export class TreadmillView {
     }
   }
 
+  // Magic dust swirling round and round inside the arena as it rises, in the arena's colour (and
+  // white and gold). One Points per arena; a weak device or a slow connection draws a third of it.
+  setDust(color, on) {
+    const N = 60;
+    if (!this.dust) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+      this.dust = new THREE.Points(geo, new THREE.PointsMaterial({
+        map: glowMap(), size: 0.75, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      }));
+      this.dust.frustumCulled = false;
+      this.dust.renderOrder = 6;
+      this.group.add(this.dust);
+      this.grains = Array.from({ length: N }, (_, i) => ({ a: Math.random() * Math.PI * 2, t: Math.random(), r: 1 + Math.random() * (ARENA.floor - 1), v: 0.18 + Math.random() * 0.2, k: i % 3 }));
+    }
+    this.dustColors = [new THREE.Color(color), new THREE.Color('#ffffff'), new THREE.Color('#ffe08a')];
+    this.dust.material.opacity = on ? 1 : 0.5; // dimmer while the arena is still locked
+  }
+
+  updateDust(dt) {
+    if (!this.dust) return;
+    const fancy = TreadmillView.fancy;
+    const n = fancy ? this.grains.length : Math.floor(this.grains.length / 3);
+    this.dust.geometry.setDrawRange(0, n);
+    const pos = this.dust.geometry.attributes.position, col = this.dust.geometry.attributes.color;
+    const fast = this.spinning ? 3 : 1;
+    for (let i = 0; i < n; i++) {
+      const g = this.grains[i];
+      g.t += dt * g.v * fast;
+      if (g.t > 1) { g.t -= 1; g.a = Math.random() * Math.PI * 2; }
+      g.a += dt * (1.6 + g.t) * fast; // round and round as it rises
+      const r = g.r * (1 - g.t * 0.35);
+      pos.setXYZ(i, Math.cos(g.a) * r, H + g.t * 9, Math.sin(g.a) * r);
+      const c = this.dustColors[g.k], f = Math.sin(g.t * Math.PI) * (0.6 + 0.4 * Math.sin(this.time * 12 + i));
+      col.setXYZ(i, c.r * f, c.g * f, c.b * f);
+    }
+    pos.needsUpdate = true;
+    col.needsUpdate = true;
+  }
+
   update(dt) {
     this.time += dt;
-    if (this.running && this.beltTexture) this.beltTexture.offset.y -= dt * BELT_SPEED;
-    this.updateAmbient(dt);
+    this.updateDust(dt);
+    // the arrows creep round on their own, and race round while someone spins in it
+    if (this.floorTexture && this.running) {
+      this.spin += dt * (this.spinning ? 3.2 : 0.25);
+      this.floorTexture.rotation = this.spin;
+    }
     if (this.smokeT === undefined) return;
     this.smokeT += dt;
     if (this.pendingBuild && this.smokeT >= SWAP_AT) {

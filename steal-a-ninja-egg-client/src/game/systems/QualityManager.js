@@ -54,6 +54,10 @@ const SLOW_FPS = 42;           // below this (or long frame spikes) the tier dro
 const SMOOTH_FPS = 56;         // at or above this for a while the tier may rise
 const SPIKE_MS = 45;           // the slowest 5% of frames must stay under this
 const DROP_AFTER = 1.5;        // seconds of slow frames before dropping
+const CRASH_FPS = 28;          // a sudden heavy stretch (the last half second this slow, or several long frames;
+                               // one lone stall, like a shader compiling, does not count)...
+const CRASH_SPIKE_MS = 90;
+const CRASH_AFTER = 0.5;       // ...drops the tier after only this long, so it never turns into lag
 const RISE_AFTER = 10;         // seconds of smooth frames before rising
 const BLOCK_RISE_SECONDS = 90; // a tier that was too heavy is not retried for this long
 const PING_EVERY = 2;          // seconds
@@ -92,6 +96,8 @@ export class QualityManager {
     this.blockedAbove = {};    // tier index -> time until which rising into it is blocked
     this.clock = 0;
     this.fps = 60;
+    this.recentFps = 60;       // the last half second only: Game turns the effects down on it at once
+    this.crashFor = 0;
     this.ping = null;
     this.network = 'good';
     this.pingTimer = 0;
@@ -125,6 +131,7 @@ export class QualityManager {
     this.tierIndex = index;
     this.slowFor = 0;
     this.smoothFor = 0;
+    this.crashFor = 0;
     this.frames.length = 0;
     this.onTier(this.tier, QUALITY[this.tier]);
   }
@@ -153,13 +160,17 @@ export class QualityManager {
     const average = sorted.reduce((a, b) => a + b, 0) / sorted.length;
     const spike = sorted[Math.floor(sorted.length * 0.95)];
     this.fps = 1000 / average;
+    const recent = this.frames.slice(-30);
+    this.recentFps = 1000 / (recent.reduce((a, b) => a + b, 0) / recent.length);
+    const crash = this.recentFps < CRASH_FPS || sorted[Math.floor(sorted.length * 0.98)] > CRASH_SPIKE_MS;
+    this.crashFor = crash ? this.crashFor + step : 0;
 
     const slow = this.fps < SLOW_FPS || spike > SPIKE_MS;
     const smooth = this.fps >= SMOOTH_FPS && spike < SPIKE_MS * 0.6;
     this.slowFor = slow ? this.slowFor + step : 0;
     this.smoothFor = smooth ? this.smoothFor + step : 0;
 
-    if (this.slowFor >= DROP_AFTER && this.tierIndex > 0) {
+    if ((this.slowFor >= DROP_AFTER || this.crashFor >= CRASH_AFTER) && this.tierIndex > 0) {
       this.blockedAbove[this.tierIndex] = this.clock + BLOCK_RISE_SECONDS;
       this.setTier(this.tierIndex - 1);
     } else if (this.smoothFor >= RISE_AFTER && this.tierIndex < this.cap) {

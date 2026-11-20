@@ -19,13 +19,14 @@ export class PlayerState extends Schema {
     this.cash = 0;
     this.income = 0;     // $ per second
     this.speed = 0;
-    this.treadmill = 'none'; // the treadmill in your pen
+    this.treadmill = 'none'; // the training arena by your pen
+    this.penLevel = 1;   // Upgrade Pen level (shown on the board by the gate)
     this.axe = 'bat';    // what is in your hand
     this.swing = 0;      // +1 on every bat swing, so everyone sees it
-    this.allPets = '[]';  // JSON [{ uid, id, cash, egg, rarity, kg }] every pet the player owns (pets panel)
     this.trail = '';      // the trail streaming behind the player
+    this.spin = 'breeze'; // the spin style: the look (and size) of their whirlwind
     this.emote = '';      // 'emoteId:n' - a new value plays that emote on this player for everyone
-    this.meta = '{}';     // JSON: passes, potions, slots, index, rebirths, timers (see progress.metaOf)
+    // (the player's own pets list and popup data are sent only to them: the 'mine' message)
   }
 }
 defineTypes(PlayerState, {
@@ -46,11 +47,11 @@ defineTypes(PlayerState, {
   income: 'number',
   speed: 'number',
   treadmill: 'string',
+  penLevel: 'uint8',
   axe: 'string',
   swing: 'uint16',
-  allPets: 'string',
-  meta: 'string',
   trail: 'string',
+  spin: 'string',
   emote: 'string',
 });
 

@@ -10,8 +10,7 @@ import {
   EXTRA_RARITY_COLOR, FRIEND_BOOST, FRIEND_MAX, MAX_PETS, TRAILS, friendCashMult, petSellValue,
   FEATURED_PACKS, INDEX_AREAS, PASSES, PASS_ORDER, POTIONS, POTION_ORDER, SLOTS, SPEED_PACKS, BUNDLE_SAVE,
   areaPets, bundlePrice, doubleSpeedPrice, eggRates, featuredPrice, giftAmount, growNowPrice, petFromArea,
-  potionPrice, rebirthCashMult, rebirthNeed, rebirthPadBonus, slotPrice, areaById,
-} from '../shared/progression.js';
+  potionPrice, rebirthCashMult, rebirthNeed, rebirthPadBonus, slotPrice, areaById, SPIN_STYLES } from '../shared/progression.js';
 import { onThumbReady, petThumb } from '../game/util/petArt.js';
 import { bloxity } from '../bloxity/bloxity.js';
 import {
@@ -87,10 +86,7 @@ export function SideMenu({ ui }) {
   const now = useNow(1000);
   const meta = ui.meta;
   const indexReady = meta && meta.discovered.some((id) => PETS[id] && !(meta.claimedPets || []).includes(id));
-  const need = meta && rebirthNeed(meta.rebirths);
-  const rebirthReady = meta && ui.stats.cash >= need.cash && ui.allPets.some((p) => petFromArea(p, areaById(need.area)));
   const giftReady = meta && left(meta, meta.giftIn, now) <= 0;
-  const dailyReady = meta?.daily && (meta.daily.ready || left(meta, meta.daily.msLeft, now) <= 0);
   const eggReady = ui.pen.some((e) => e.left <= 0);
   const open = (popup) => uiStore.set({ popup, panel: null });
   return (
@@ -98,8 +94,10 @@ export function SideMenu({ ui }) {
       <div className="side-menu">
         <button type="button" className="side-btn shop" onClick={() => open('shop')}><CartArt /><span>Shop</span>{giftReady && <i className="dot">!</i>}</button>
         <button type="button" className="side-btn index-btn" onClick={() => open('index')}><BookArt /><span>Index</span>{indexReady && <i className="dot">!</i>}</button>
-        <button type="button" className="side-btn daily-btn" onClick={() => open('daily')}><CalendarArt /><span>Daily</span>{dailyReady && <i className="dot">!</i>}</button>
-        <button type="button" className="side-btn rebirth" onClick={() => open('rebirth')}><RebirthArt /><span>Rebirth</span>{rebirthReady && <i className="dot">!</i>}</button>
+        {/* Slow Mode, under Shop and Index (like the video) */}
+        <button type="button" className={`slow-mode${ui.slowMode ? ' on' : ''}`} onClick={() => uiStore.set({ slowMode: !ui.slowMode })}>
+          <i /><span>Slow Mode</span>
+        </button>
       </div>
       <div className="side-tabs">
         <button type="button" className={`side-tab pets${ui.popup === 'pets' ? ' on' : ''}`} onClick={() => open('pets')} aria-label="Your pets">
@@ -108,36 +106,7 @@ export function SideMenu({ ui }) {
         </button>
         <button type="button" className={`side-tab weapons${ui.popup === 'weapons' ? ' on' : ''}`} onClick={() => open('weapons')} aria-label="Weapons"><SwordArt size={46} /></button>
       </div>
-      {meta && <GiftButton ui={ui} now={now} />}
-      {meta && <BoostBar meta={meta} now={now} />}
     </>
-  );
-}
-
-function GiftButton({ ui, now }) {
-  const ms = left(ui.meta, ui.meta.giftIn, now);
-  const ready = ms <= 0;
-  return (
-    <button type="button" className={`gift-btn${ready ? ' ready' : ''}`} disabled={!ready} onClick={() => ui.act('claimGift')}>
-      <GiftArt size={42} />
-      <span>{ready ? <>CLAIM <b>${formatNumber(giftAmount(ui.stats.income))}</b></> : <>Free gift in: <b>{clock(ms)}</b></>}</span>
-    </button>
-  );
-}
-
-function BoostBar({ meta, now }) {
-  const active = POTION_ORDER.filter((id) => left(meta, meta.boosts[id], now) > 0);
-  if (!active.length && !meta.passes.length && !meta.rebirths) return null;
-  return (
-    <div className="boost-bar">
-      {meta.rebirths > 0 && <div className="boost rebirth-chip" title="Rebirth cash bonus"><RebirthArt size={22} /><b>x{rebirthCashMult(meta.rebirths)}</b></div>}
-      {active.map((id) => (
-        <div key={id} className="boost" title={POTIONS[id].name}>
-          <PotionArt color={POTIONS[id].color} size={30} />
-          <span>{clock(left(meta, meta.boosts[id], now))}</span>
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -513,6 +482,79 @@ function RunnerArt({ trail, size = 190 }) {
       {!stripes && <circle cx="80" cy="18" r="2" fill={b} opacity="0.9" />}
       {!stripes && <circle cx="22" cy="30" r="1.6" fill={a} opacity="0.9" />}
     </svg>
+  );
+}
+
+// A whirlwind drawn like a sticker (the Spin Shop's cards): bold swirl bands in the style's colours with
+// a dark outline and white highlights, curls of wind flaring round its top, and what flies round it.
+function SpinArt({ style, size = 190 }) {
+  const [a, b, c] = [style.colors[0], style.colors[1] || style.colors[0], style.colors[2] || style.colors[0]];
+  const id = `spin-${style.id}`;
+  const bands = [[50, 30, 44, 11], [52, 46, 36, 10], [49, 61, 28, 9], [51, 74, 20, 8], [50, 85, 12, 6], [50, 93, 6, 4]];
+  const curls = [[14, 26, -1], [86, 24, 1], [22, 12, -1], [78, 12, 1], [50, 6, 1]];
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 104" aria-hidden="true">
+      <defs>
+        <linearGradient id={`${id}-b`} x1="0" x2="1">
+          <stop offset="0" stopColor={c} />
+          <stop offset="0.45" stopColor={a} />
+          <stop offset="0.75" stopColor={b} />
+          <stop offset="1" stopColor={c} />
+        </linearGradient>
+        <radialGradient id={`${id}-g`}>
+          <stop offset="0" stopColor="#ffffff" stopOpacity="0.9" />
+          <stop offset="1" stopColor={style.glow} stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <ellipse cx="50" cy="56" rx="46" ry="44" fill={`url(#${id}-g)`} />
+      {curls.map(([x, y, f], i) => (
+        <path key={`c${i}`} transform={`translate(${x} ${y}) scale(${f} 1)`} d="M-8 10 C-10 0 -2 -9 6 -9 C14 -9 13 2 7 1 C2 0 4 -5 7 -4 C1 -6 -4 1 -1 10 Z"
+          fill={i % 2 ? b : a} stroke="#14141a" strokeWidth="1.6" strokeLinejoin="round" />
+      ))}
+      {bands.map(([x, y, rx, ry], i) => (
+        <g key={i}>
+          <ellipse cx={x} cy={y} rx={rx} ry={ry} fill={`url(#${id}-b)`} stroke="#14141a" strokeWidth="2" />
+          <path d={`M${x - rx * 0.8} ${y - ry * 0.15} Q${x} ${y + ry * 0.7} ${x + rx * 0.85} ${y - ry * 0.3}`} stroke="#ffffff" strokeWidth="1.8" fill="none" strokeLinecap="round" opacity="0.9" />
+          <path d={`M${x - rx * 0.6} ${y - ry * 0.55} Q${x - rx * 0.1} ${y - ry * 0.9} ${x + rx * 0.5} ${y - ry * 0.6}`} stroke={c} strokeWidth="1.4" fill="none" strokeLinecap="round" />
+        </g>
+      ))}
+      {style.extra === 'shards' && [[10, 44], [88, 50], [18, 74], [82, 80], [30, 22]].map(([x, y], i) => <path key={`s${i}`} d={`M${x} ${y - 7} L${x + 4} ${y} L${x} ${y + 7} L${x - 4} ${y} Z`} fill="#d8f4ff" stroke="#3a7aa8" strokeWidth="1.2" />)}
+      {style.extra === 'gems' && [[10, 48], [90, 44], [20, 78], [80, 76]].map(([x, y], i) => <path key={`g${i}`} d={`M${x} ${y - 6} L${x + 5} ${y - 1} L${x} ${y + 6} L${x - 5} ${y - 1} Z`} fill={style.colors[i % style.colors.length]} stroke="#14141a" strokeWidth="1.2" />)}
+      {style.extra === 'bubbles' && [[12, 40, 4], [88, 54, 5], [20, 80, 3], [84, 84, 4], [8, 62, 3]].map(([x, y, r], i) => <circle key={`b${i}`} cx={x} cy={y} r={r} fill="#bff0ff" stroke="#1a6ae0" strokeWidth="1.2" opacity="0.9" />)}
+      {style.extra === 'orbs' && [[12, 46], [88, 40], [86, 78]].map(([x, y], i) => <circle key={`o${i}`} cx={x} cy={y} r="5" fill={style.colors[1]} stroke="#14141a" strokeWidth="1.2" />)}
+      {style.extra === 'flames' && [[14, 70], [86, 66], [26, 90], [76, 92]].map(([x, y], i) => <path key={`f${i}`} d={`M${x} ${y + 6} C${x - 6} ${y} ${x - 2} ${y - 6} ${x} ${y - 9} C${x + 2} ${y - 4} ${x + 7} ${y} ${x} ${y + 6} Z`} fill="#ff8a1a" stroke="#7a1a0a" strokeWidth="1.2" />)}
+      {(style.extra === 'sparks' || style.mult >= 4) && [[16, 30], [86, 30], [90, 70], [10, 66]].map(([x, y], i) => <path key={`k${i}`} d={`M${x} ${y - 5} L${x + 1.2} ${y - 1.2} L${x + 5} ${y} L${x + 1.2} ${y + 1.2} L${x} ${y + 5} L${x - 1.2} ${y + 1.2} L${x - 5} ${y} L${x - 1.2} ${y - 1.2} Z`} fill="#ffffff" />)}
+    </svg>
+  );
+}
+
+// The Spin Shop (opens at its stall): whirlwind styles you buy with cash and equip. Each one
+// multiplies the speed your arena gives, and makes your whirlwind bigger and fancier.
+export function SpinShopPopup({ ui }) {
+  const { meta, stats, act } = ui;
+  if (!meta) return null;
+  const owned = new Set(meta.spins || ['breeze']);
+  return (
+    <Popup title="Spin Shop" theme="purple" wide>
+      <div className="shop-sub">Your whirlwind spins you faster in your Arena · ${formatNumber(stats.cash)}</div>
+      <CardRow>
+        {SPIN_STYLES.map((style) => {
+          const has = owned.has(style.id);
+          const on = (meta.spin || 'breeze') === style.id;
+          return (
+            <div key={style.id} className="item-card spin-card" style={{ background: `linear-gradient(${style.card[0]}, ${style.card[1]})` }}>
+              <b className="item-name">{style.name}</b>
+              <span className="item-rarity spin-tag">{style.tag}</span>
+              <div className="item-art"><SpinArt style={style} /></div>
+              <div className="item-stat"><em>x{style.mult}</em> Spin Speed</div>
+              {on ? <button type="button" className="buy wide equipped" disabled>Equipped</button>
+                : has ? <button type="button" className="buy wide" onClick={() => act('equipSpin', { id: style.id })}>Equip</button>
+                  : <Price price={style.price} cash={stats.cash} onClick={() => act('buySpin', { id: style.id })} wide />}
+            </div>
+          );
+        })}
+      </CardRow>
+    </Popup>
   );
 }
 
