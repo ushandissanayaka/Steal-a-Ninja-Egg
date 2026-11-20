@@ -46,15 +46,22 @@ export const PLOT = {
   penHalfZ: 26,         // ...and narrow
   gateHalf: 9,          // the open gap in the front fence (local z)
   // where stolen eggs sit while they grow (local x/z); the first RULES.penSlots are open at the start
-  eggSlots: [[-18, -14], [-18, 0], [-18, 14], [-32, -14], [-32, 0], [-32, 14]].map(([x, z]) => ({ x, z })),
-  treadmill: { x: 15, z: 19 },         // outside the front fence, beside the gate
-  treadmillSign: { x: 27, z: 10 },     // its Unlock / Upgrade board, outside too, facing the lobby
+  // three rows of three; the first RULES.penSlots are open at the start, more with Upgrade Pen,
+  // the Egg Slot pass and rebirths
+  eggSlots: [[-16, -14], [-16, 0], [-16, 14], [-29, -14], [-29, 0], [-29, 14], [-42, -14], [-42, 0], [-42, 14]].map(([x, z]) => ({ x, z })),
+  treadmill: { x: 16, z: 18 },         // the round training arena, outside the front fence beside the gate
+  treadmillSign: { x: 0, z: 14 },      // the "Upgrade Arena" board: beside the gate, on the arena side, facing out
+  penSign: { x: 0, z: -14 },           // the "Upgrade Pen" board: beside the gate, on the other side
   petsMinX: -78,        // pets wander behind the eggs
-  petsMaxX: -44,
+  petsMaxX: -52,
   spawn: { x: 30, z: 0 },
 };
-// The belt of the treadmill, around PLOT.treadmill, in plot units.
-export const TREADMILL_BELT = { halfX: 4.8, backZ: 4.6, frontZ: 6.5, height: 1.23 };
+// The round training arena (it took the treadmill's place; saves still call it `treadmill`), around
+// PLOT.treadmill, in plot units: the floor you stand on inside the low round wall, the wall itself and
+// the gap in it you walk in through (an angle in the plot's frame, pointing at the gate).
+export const ARENA = { floor: 5.6, wall: 7.2, wallHeight: 1.9, height: 0.7, door: Math.atan2(-18, -20), doorHalf: 0.42 };
+// kept for code that still speaks of the belt
+export const TREADMILL_BELT = { halfX: ARENA.floor, backZ: ARENA.floor, frontZ: ARENA.floor, height: ARENA.height };
 
 const plotTurn = (plot) => {
   if (!plot.turn) plot.turn = { c: Math.round(Math.cos(plot.rot) * 1e9) / 1e9, s: Math.round(Math.sin(plot.rot) * 1e9) / 1e9 };
@@ -73,15 +80,24 @@ export function worldToPlot(plot, x, z) {
   return { x: dx * c - dz * s, z: dx * s + dz * c };
 }
 
+// Standing on the floor of your training arena (inside its round wall).
 export function onTreadmill(plot, x, y, z) {
   const local = worldToPlot(plot, x, z);
-  const lx = local.x - PLOT.treadmill.x;
-  const lz = local.z - PLOT.treadmill.z;
-  return Math.abs(lx) <= TREADMILL_BELT.halfX && lz >= -TREADMILL_BELT.backZ && lz <= TREADMILL_BELT.frontZ
-    && y > TREADMILL_BELT.height * PLOT_SCALE * 0.5;
+  return Math.hypot(local.x - PLOT.treadmill.x, local.z - PLOT.treadmill.z) <= ARENA.floor + 0.4
+    && y > ARENA.height * PLOT_SCALE * 0.5;
 }
 
 // Inside the pen's fence (local frame), where eggs are put down to grow.
+// The nest an egg in the pen sits in: its own slot (s), or (older saves) its place in the list.
+export const penSlotOf = (egg, i) => (Number.isInteger(egg?.s) && egg.s >= 0 && egg.s < PLOT.eggSlots.length ? egg.s : i);
+// A random free nest among the first cap ones (null when they are all taken).
+export function freePenSlot(pen, cap, rnd = Math.random) {
+  const used = new Set(pen.map(penSlotOf));
+  const free = [];
+  for (let i = 0; i < Math.min(cap, PLOT.eggSlots.length); i++) if (!used.has(i)) free.push(i);
+  return free.length ? free[Math.floor(rnd() * free.length)] : null;
+}
+
 export function inPen(plot, x, z) {
   const { x: lx, z: lz } = worldToPlot(plot, x, z);
   return lx > PLOT.penMinX - 2 && lx < PLOT.penMaxX + 6 && Math.abs(lz) < PLOT.penHalfZ + 2;
@@ -89,14 +105,15 @@ export function inPen(plot, x, z) {
 
 // Along the north wall either side of the dojo (like the video): the Trails (cosmetic) shop, Sell
 // and the Invite Friend pad on the left; the Free Gift, the three arched leaderboards and the
-// events board (the video's "ADMIN ABUSE" board) on the right.
+// Spin Shop, then the events board (the video's "ADMIN ABUSE" board) on the right.
 export const SHOPS = {
+  spin: { x: 306, z: 16 },    // the Spin Shop (whirlwind styles), on the right past the leaderboards
   trails: { x: -258, z: 16 },
   sell: { x: -204, z: 16 },
   invite: { x: -166, z: 26 },
   free: { x: 158, z: 26 },
   events: { x: 364, z: 14 },
-  spawn: { x: 0, z: 34, radius: 16 }, // where everyone appears: the open grass in front of the dojo
+  spawn: { x: 0, z: 190, radius: 24 }, // where everyone appears: the pad in the middle of the lobby
 };
 
 export const RULES = {
@@ -112,8 +129,19 @@ export const RULES = {
   batRange: 10,
   stunMs: 1800,           // a guardian hit with the bat stands dazed this long
   shownPets: 12,
-  treadmillStepMs: 400,   // one treadmill step: +the treadmill's gain to speed
+  treadmillStepMs: 400,   // one arena step: +the arena's gain to speed
 };
+
+// Upgrade Pen (the board by the gate): each level opens one more egg slot in the pen.
+export const PEN_LEVELS = [
+  { level: 1, price: 0 },
+  { level: 2, price: 300 },
+  { level: 3, price: 6_000 },
+  { level: 4, price: 90_000 },
+  { level: 5, price: 1_200_000 },
+];
+export const MAX_PEN_LEVEL = PEN_LEVELS.length;
+export const nextPenLevel = (level) => PEN_LEVELS[Math.max(1, level || 1)] || null;
 
 export const RANGE = { pick: 10, steal: 11, slot: 9 * PLOT_SCALE, shop: 30, sign: 14 * PLOT_SCALE };
 
@@ -121,7 +149,8 @@ export const RANGE = { pick: 10, steal: 11, slot: 9 * PLOT_SCALE, shop: 30, sign
 // every nest gets fresh eggs ("ALL EGGS RESET!").
 // The last freezeS seconds of each day / night everyone stands still; then everyone is sent back to the
 // lobby and the glass gate stays shut for gateS seconds (counting down) before it opens.
-export const CYCLE = { dayMs: 5 * 60_000, nightMs: 5 * 60_000, nightGrowth: 30, freezeS: 3, gateS: 10 };
+// eveningS: the last this-many seconds of the day are evening (the sky turns orange and pink).
+export const CYCLE = { dayMs: 5 * 60_000, nightMs: 5 * 60_000, nightGrowth: 30, freezeS: 3, gateS: 10, eveningS: 75 };
 export const frozenAt = (state) => state.gate === 0 && state.clock > 0 && state.clock <= CYCLE.freezeS;
 
 // Speed comes from running (a little) and from your treadmill (a lot). Walk speed grows slowly with it.
@@ -135,23 +164,23 @@ export const RARITY_COLOR = {
   Secret: '#5a5e68', Divine: '#fff3b0', Eternal: '#7ff6ff',
 };
 
-// ------------------------------------------------------------------ treadmills (bought at your pen)
+// ------------------------------------------------------------------ training arenas (bought at your pen)
 
-// gain = speed per step. Each one costs ~5-7x the last and gives ~4-5x more.
+// The round arena outside your pen: stand in it and you spin, gaining speed every step.
+// gain = speed per step. Unlock, then 5 upgrades; each costs ~5-7x the last and gives ~4x more. The ids are the old
+// treadmill ids, so saves keep their level.
 export const TREADMILLS = [
-  { id: 'none', name: 'No Treadmill', gain: 0, price: 0 },
-  { id: 'abandoned', name: 'Abandoned Treadmill', gain: 2, price: 800, color: '#8a6a4a' },
-  { id: 'static', name: 'Static Treadmill', gain: 7, price: 5_000, color: '#5aa8ff' },
-  { id: 'candy', name: 'Candy Treadmill', gain: 30, price: 35_000, color: '#ff7ab8' },
-  { id: 'bone', name: 'Bone Treadmill', gain: 120, price: 220_000, color: '#f0ead8' },
-  { id: 'carnival', name: 'Carnival Treadmill', gain: 400, price: 1_500_000, color: '#ff3a3a' },
-  { id: 'frost', name: 'Frostbite Treadmill', gain: 1_000, price: 10_000_000, color: '#9be8ff' },
-  { id: 'demon', name: 'Demon Treadmill', gain: 2_200, price: 70_000_000, color: '#ff5a1a' },
-  { id: 'nightmare', name: 'Nightmare Treadmill', gain: 4_500, price: 500_000_000, color: '#8a5aff' },
-  { id: 'glitch', name: 'Glitch Treadmill', gain: 10_000, price: 3_500_000_000, color: '#3dffb0' },
-  { id: 'void', name: 'Void Treadmill', gain: 25_000, price: 25_000_000_000, color: '#1a1030' },
+  { id: 'none', name: 'Locked Arena', gain: 0, price: 0 },
+  { id: 'abandoned', name: 'Wooden Arena', gain: 2, price: 800, color: '#ffd21f' },
+  { id: 'static', name: 'Bamboo Arena', gain: 7, price: 5_000, color: '#7dff3f' },
+  { id: 'candy', name: 'Purple Blossom Arena', gain: 30, price: 35_000, color: '#b05aff' },
+  { id: 'bone', name: 'Golden Temple Arena', gain: 120, price: 220_000, color: '#ffd21f' },
+  { id: 'carnival', name: 'Fire Dragon Arena', gain: 450, price: 1_500_000, color: '#ff3a3a' },
+  { id: 'frost', name: 'Ice Peak Arena', gain: 2_000, price: 10_000_000, color: '#9be8ff' },
 ];
-export const treadmillById = (id) => TREADMILLS.find((t) => t.id === id) || TREADMILLS[0];
+// the arenas there used to be past the last one: they count as the best one now
+export const TREADMILL_ALIAS = { demon: 'frost', nightmare: 'frost', glitch: 'frost', void: 'frost' };
+export const treadmillById = (id) => TREADMILLS.find((t) => t.id === (TREADMILL_ALIAS[id] || id)) || TREADMILLS[0];
 export const nextTreadmill = (id) => TREADMILLS[TREADMILLS.indexOf(treadmillById(id)) + 1] || null;
 
 // The bat in your hand (hotbar slot 1): knocks the egg out of a carrier's hands, dazes a guardian.
@@ -165,19 +194,19 @@ export const axeById = () => AXES[0];
 // (each about 3x the one before), then a bigger step for the last two. cash = $/s of a Common pet
 // from a Common egg of 1 kg. Each biome's three pets go from common to rare.
 export const BIOMES = [
-  { id: 'pumpkin', name: 'Pumpkin Patch', speed: 0, cash: 3, guardian: 'grinhound', pets: ['pumpkinCamel', 'sheetGhost', 'scarecrowCat'] },
-  { id: 'candy', name: 'Candy Lane', speed: 640, cash: 20, guardian: 'sugarSpecter', pets: ['gummyBat', 'lollipopLlama', 'candyCornCrab'] },
-  { id: 'graveyard', name: 'Graveyard', speed: 3_000, cash: 120, guardian: 'graveKnight', pets: ['boneDog', 'zombieBunny', 'tombBat'] },
-  { id: 'bog', name: 'Witch Swamp', speed: 7_700, cash: 700, guardian: 'bogHorror', pets: ['bogFrog', 'slimeSnail', 'rainbowToad'] },
-  { id: 'carnival', name: 'Creepy Carnival', speed: 22_500, cash: 4_200, guardian: 'bigTopBrute', pets: ['popcornPup', 'clownFish', 'circusElephant'] },
-  { id: 'frost', name: 'Frostbite Hollow', speed: 68_000, cash: 26_000, guardian: 'frostbiteYeti', pets: ['snowWisp', 'icicleSwordfish', 'frostbiteBear'] },
-  { id: 'backrooms', name: 'The Backrooms', speed: 180_000, cash: 160_000, guardian: 'grinner', pets: ['candleGhost', 'phantomCat', 'ghostPrince'] },
-  { id: 'inferno', name: 'Blood Moon', speed: 375_000, cash: 950_000, guardian: 'emberFiend', pets: ['hellPup', 'magmaImp', 'demonCalf'] },
-  { id: 'void', name: 'The Void', speed: 750_000, cash: 5_800_000, guardian: 'voidKraken', pets: ['voidEye', 'starEater', 'goldenAbomination'] },
-  { id: 'nightmare', name: 'The Nightmare', speed: 4_500_000, cash: 35_000_000, guardian: 'skullAlien', pets: ['spikePuffer', 'nightmareRaven', 'shadowShark'] },
+  { id: 'dojo', name: "Brown Ninja's Dojo", speed: 0, cash: 3, guardian: 'brownNinja', pets: ['pumpkinCamel', 'sheetGhost', 'scarecrowCat'] },
+  { id: 'garden', name: "Old Master's Garden", speed: 640, cash: 20, guardian: 'oldMaster', pets: ['gummyBat', 'lollipopLlama', 'candyCornCrab'] },
+  { id: 'fire', name: "Red Ninja's Fire Temple", speed: 3_000, cash: 120, guardian: 'redNinja', pets: ['boneDog', 'zombieBunny', 'tombBat'] },
+  { id: 'storm', name: "Blue Ninja's Lightning Ruins", speed: 7_700, cash: 700, guardian: 'blueNinja', pets: ['bogFrog', 'slimeSnail', 'rainbowToad'] },
+  { id: 'earth', name: "Black Ninja's Earth Caves", speed: 22_500, cash: 4_200, guardian: 'earthNinja', pets: ['popcornPup', 'clownFish', 'circusElephant'] },
+  { id: 'energy', name: "Green Ninja's Energy Temple", speed: 68_000, cash: 26_000, guardian: 'greenNinja', pets: ['snowWisp', 'icicleSwordfish', 'frostbiteBear'] },
+  { id: 'ice', name: "White Ninja's Ice Temple", speed: 180_000, cash: 160_000, guardian: 'iceNinja', pets: ['candleGhost', 'phantomCat', 'ghostPrince'] },
+  { id: 'water', name: "Water Queen's Sea Kingdom", speed: 375_000, cash: 950_000, guardian: 'waterQueen', pets: ['hellPup', 'magmaImp', 'demonCalf'] },
+  { id: 'ghost', name: "Ghost Ninja's Haunted District", speed: 750_000, cash: 5_800_000, guardian: 'ghostNinja', pets: ['voidEye', 'starEater', 'goldenAbomination'] },
+  { id: 'fortress', name: "Shadow Lord's Fortress", speed: 4_500_000, cash: 35_000_000, guardian: 'shadowLord', pets: ['spikePuffer', 'nightmareRaven', 'shadowShark'] },
 ];
 // Stages that were removed (older saves can still hold their eggs and pets): what they count as now.
-export const BIOME_ALIAS = { haunted: 'graveyard', manor: 'backrooms', glitch: 'void' };
+export const BIOME_ALIAS = { haunted: 'fire', graveyard: 'fire', manor: 'ice', backrooms: 'ice', inferno: 'water', glitch: 'ghost', void: 'ghost', nightmare: 'fortress', pumpkin: 'dojo', candy: 'garden', bog: 'storm', carnival: 'earth', frost: 'energy' };
 const LEGACY_PETS = { haunted: ['spookyOwl', 'twigSpider', 'ghostFox'], glitch: ['glitchCat', 'errorBlob', 'pixelDragon'] };
 export const biomeById = (id) => BIOMES.find((b) => b.id === (BIOME_ALIAS[id] || id)) || BIOMES[0];
 export const biomeIndex = (id) => Math.max(0, BIOMES.findIndex((b) => b.id === (BIOME_ALIAS[id] || id)));
@@ -203,6 +232,17 @@ export const DIFFICULTY_COLOR = {
 // One per biome, asleep on its nest. Its speed is a little under walkSpeed(biome.speed): with the
 // recommended speed you escape, with less it catches you somewhere on the run home.
 export const GUARDIANS = {
+  // the first two stages: Bloxity characters in karate gi (see NinjaGuardians.js)
+  brownNinja: { name: 'Brown Ninja', scale: 3.4, reach: 7.5, ninja: true },
+  oldMaster: { name: 'Old Master Hoshi', scale: 3.5, reach: 8, ninja: true },
+  redNinja: { name: 'Red Ninja', scale: 3.5, reach: 8, ninja: true },
+  blueNinja: { name: 'Blue Ninja', scale: 3.5, reach: 8.5, ninja: true },
+  earthNinja: { name: 'Black Ninja', scale: 3.6, reach: 8.5, ninja: true },
+  greenNinja: { name: 'Green Ninja', scale: 3.6, reach: 9, ninja: true },
+  iceNinja: { name: 'White Ninja', scale: 3.7, reach: 9.5, ninja: true },
+  waterQueen: { name: 'Water Queen', scale: 3.7, reach: 9.5, ninja: true },
+  ghostNinja: { name: 'Ghost Ninja', scale: 3.8, reach: 10, ninja: true },
+  shadowLord: { name: 'The Shadow Lord', scale: 4.0, reach: 10.5, ninja: true },
   grinhound: { name: 'Grinhound', scale: 1.5, reach: 5 },
   sugarSpecter: { name: 'Sugar Specter', float: true, scale: 1.3, reach: 5.5 },
   hollowWatcher: { name: 'The Hollow Watcher', float: true, scale: 1.25, reach: 6 },
@@ -240,6 +280,10 @@ export const animalSize = () => 1;
 // One nest per biome, on alternate sides of the corridor, three eggs on it, the guardian asleep
 // beside them. Egg slots and the guardian are relative to the nest's middle.
 export const NEST_RADIUS = 20;
+// Every nest (its eggs and its guardian) stands on a raised round stage this high and this wide.
+export const NEST_RISE = 1.6;
+export const NEST_STAGE_R = NEST_RADIUS + 3;
+export const onNestStage = (x, z) => NESTS.some((n) => Math.hypot(x - n.x, z - n.z) <= NEST_STAGE_R);
 export const NEST_EGGS = [[-8, 7], [0, -8], [8, 7]];
 export const NESTS = BIOMES.map((b, i) => {
   const side = i % 2 ? -1 : 1;
@@ -279,7 +323,7 @@ export const EVENT_EGGS = {
 
 // Each biome's eggs have its colour as spots; the shell's colour is the egg's rarity.
 export const BIOME_COLOR = {
-  pumpkin: '#ff8a1a', candy: '#ff6ab0', haunted: '#5f7f34', graveyard: '#8a9198', carnival: '#ff3a3a', bog: '#3fcf8a',
+  dojo: '#7a4a26', garden: '#5fcf4a', fire: '#e0202e', storm: '#3aa8ff', earth: '#d8b030', energy: '#6aff3a', ice: '#9fdcff', water: '#1a8ae0', ghost: '#3aff8a', fortress: '#ff2ad4', pumpkin: '#ff8a1a', candy: '#ff6ab0', haunted: '#5f7f34', graveyard: '#8a9198', carnival: '#ff3a3a', bog: '#3fcf8a',
   frost: '#6fd0ff', manor: '#a88aff', inferno: '#ff1a2a', nightmare: '#e8d2a0', glitch: '#20f0a0', void: '#7a3aff', backrooms: '#e8c84a',
 };
 export const EGG_COLOR = {
@@ -298,23 +342,23 @@ const SPECIES_MULT = [1, 1.7, 2.8];
 const SPECIES_WEIGHT = [62, 29, 9];
 // From the fifth stage on the third animal of each stage is a giant (taller than the walls), and
 // about one egg in three hatches one (a Common egg 33%; rarer eggs even more often).
-export const GIANTS_FROM = 4; // stage index (0 = the first stage)
+export const GIANTS_FROM = 10; // stage index (0 = the first stage); every stage hatches ninjas
 const GIANT_STAGE_WEIGHT = [42, 25, 33];
 export const PETS = {};
 export const PET_POOLS = {};
 const PET_NAMES = {
-  pumpkinCamel: 'Pumpkin Camel', sheetGhost: 'Harvest Fox', scarecrowCat: 'Scarecrow Cat',
-  gummyBat: 'Gummy Scorpion', lollipopLlama: 'Lollipop Llama', candyCornCrab: 'Candy Corn Crab',
+  pumpkinCamel: 'Dojo Trainee', sheetGhost: 'Brown Shadow', scarecrowCat: 'Sand Monk',
+  gummyBat: 'Bamboo Student', lollipopLlama: 'Leaf Ninja', candyCornCrab: 'Garden Monk',
   spookyOwl: 'Spooky Owl', twigSpider: 'Twig Spider', ghostFox: 'Ghost Fox',
-  boneDog: 'Wolf Man', zombieBunny: 'Grave Spider', tombBat: 'Vampire Man',
-  popcornPup: 'Popcorn Pup', clownFish: 'Clown Shark', circusElephant: 'Giant Circus Elephant',
-  bogFrog: 'Bog Frog', slimeSnail: 'Swamp Croc', rainbowToad: 'Witch Octopus',
-  snowWisp: 'Snow Owl', icicleSwordfish: 'Icicle Swordfish', frostbiteBear: 'Giant Frostbite Bear',
-  candleGhost: 'Lamp Moth', phantomCat: 'Phantom Panther', ghostPrince: 'Giant Hallway Mantis',
-  hellPup: 'Hell Hound', magmaImp: 'Magma Scorpion', demonCalf: 'Giant Blood Dragon',
-  spikePuffer: 'Spike Puffer', nightmareRaven: 'Nightmare Raven', shadowShark: 'Giant Shadow Megalodon',
+  boneDog: 'Ember Ninja', zombieBunny: 'Flame Monk', tombBat: 'Blaze Fighter',
+  popcornPup: 'Earth Kunoichi', clownFish: 'Cave Ninja', circusElephant: 'Quake Monk',
+  bogFrog: 'Spark Ninja', slimeSnail: 'Thunder Monk', rainbowToad: 'Storm Blade',
+  snowWisp: 'Energy Kunoichi', icicleSwordfish: 'Spirit Monk', frostbiteBear: 'Golden Guardian',
+  candleGhost: 'Frost Ninja', phantomCat: 'Snow Kunoichi', ghostPrince: 'Ice Monk',
+  hellPup: 'Tide Ninja', magmaImp: 'Sea Kunoichi', demonCalf: 'Coral Monk',
+  spikePuffer: 'Dark Warrior', nightmareRaven: 'Shadow Kunoichi', shadowShark: 'Oni Monk',
   glitchCat: 'Glitch Cat', errorBlob: 'Error Blob', pixelDragon: 'Pixel Dragon',
-  voidEye: 'Void Jelly', starEater: 'Star Shark', goldenAbomination: 'Giant Void Octopus',
+  voidEye: 'Ghost Warrior', starEater: 'Spirit Kunoichi', goldenAbomination: 'Phantom Monk',
 };
 BIOMES.forEach((b, i) => {
   b.pets.forEach((id, slot) => {

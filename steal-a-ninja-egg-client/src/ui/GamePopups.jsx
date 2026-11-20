@@ -19,7 +19,7 @@ import {
 } from './popupIcons.jsx';
 
 const closePopup = () => uiStore.set({ popup: null });
-const EGG_SPOTS = { pumpkin: '#ff8a1a', candy: '#ff6ab0', haunted: '#5f7f34' };
+const EGG_SPOTS = { dojo: '#7a4a26', garden: '#5fcf4a', fire: '#e0202e', storm: '#3aa8ff', earth: '#d8b030', energy: '#6aff3a', pumpkin: '#ff8a1a', candy: '#ff6ab0', haunted: '#5f7f34' };
 
 // "x2 Money" -> a green "x2" and the rest in white
 function Title({ text }) {
@@ -160,7 +160,7 @@ export function ShopPopup({ ui }) {
           <Buy price={doubleSpeedPrice(stats.speed)} have={cash} onClick={() => act('doubleSpeed')} />
         </div>
         <div className="gp-card burst theme-silver">
-          <b className="gp-card-title big">TREADMILL</b>
+          <b className="gp-card-title big">ARENA</b>
           <div className="gp-card-art"><TreadmillArt size={130} color={next?.color || mill.color || '#35a8ff'} /></div>
           {next ? <>
             <span className="gp-card-text">{next.name}</span>

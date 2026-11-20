@@ -9,10 +9,12 @@
 import * as THREE from 'three';
 import { ChunkedVoxels } from '../util/bake.js';
 import { canvasTexture, drawOutlinedText } from '../util/canvasText.js';
-import { CYCLE, NESTS, PLOTS, SHOPS, WORLD } from '../../shared/gameData.js';
+import { ARENA, CYCLE, NESTS, PLOT, PLOTS, PLOT_SCALE, SHOPS, WORLD, plotToWorld } from '../../shared/gameData.js';
 import { PlotView } from '../entities/PlayerBase.js';
 import { addArchBoards, addEventsBoard, addGiftPad, addStall } from '../entities/Shops.js';
 import { buildDojo } from '../entities/Dojo.js';
+import { NightLamps } from '../entities/NightLamps.js';
+import { SpawnPad } from '../entities/SpawnGate.js';
 import { buildBiomeCorridor } from './BiomeCorridor.js';
 
 const { halfX, southZ, lineZ, northZ, openingHalf, wallHeight, corridorHalf } = WORLD;
@@ -164,8 +166,10 @@ export function buildStartingPlace(scene, physics, effects) {
   addLobbyWalls(scene, v, physics);
   addCorridorColliders(physics);
   addSafeZone(scene, glow);
-  const setDojoClock = buildDojo(scene, v, physics);
-  const { colliders = [] } = buildBiomeCorridor(scene, v, glow) || {};
+  const lamps = new NightLamps(scene); // the lamps that come on at night (dojo, garden, fire temple)
+  const setDojoClock = buildDojo(scene, v, physics, lamps);
+  const { colliders = [], floors = [] } = buildBiomeCorridor(scene, v, glow, lamps) || {};
+  for (const f of floors) physics.addRoundSurface(f.x, f.z, f.r, f.h, { floor: true }); // the nests' stages
   for (const c of colliders) {
     if (c.kind === 'circle') physics.addCircle(c.x, c.z, c.r);
     else physics.addBox(c.minX, c.maxX, c.minZ, c.maxZ);
@@ -175,6 +179,10 @@ export function buildStartingPlace(scene, physics, effects) {
     addStall(scene, v, physics, {
       ...SHOPS.trails, name: 'TRAILS', color: '#9a6232', stripe: '#fff6e8', fill: '#ffd06a', floor: '#e8c27a', bulbs: false,
       lines: [{ text: 'NEW!', size: 60, fill: '#ff2a2a' }, { text: 'TRAILS SHOP', size: 70, fill: '#ffffff' }],
+    }),
+    addStall(scene, v, physics, {
+      ...SHOPS.spin, name: 'SPIN', color: '#9a6232', stripe: '#ffffff', fill: '#ffe14a', floor: '#fff27a', bulbs: false,
+      lines: [{ text: '🌀', size: 70, fill: '#ffffff' }, { text: 'SPIN SHOP', size: 70, fill: '#ffffff' }],
     }),
     addStall(scene, v, physics, { ...SHOPS.sell, name: 'SELL', color: '#e3162a', fill: '#ffd21f', floor: '#ff3a3a', bulbs: false }),
     addGiftPad(scene, SHOPS.free.x, SHOPS.free.z),
@@ -201,7 +209,34 @@ export function buildStartingPlace(scene, physics, effects) {
   scene.add(sea);
 
   const plots = PLOTS.map((plot, i) => new PlotView(i, plot, scene, physics, effects));
+  const spawnPad = new SpawnPad(scene, physics, SHOPS.spawn); // where everyone appears (a speed boost)
+
+  // soft light shining up round everything in the lobby, so it all shows at night: the shops, the
+  // leaderboards, the events board, and on every plot its arena, its pen's corners and its boards
+  for (const [id, r, color] of [['spin', 12, '#fff08a'], ['trails', 12, '#ffd06a'], ['sell', 12, '#ff8a8a'], ['invite', 10, '#8ae4ff'], ['free', 10, '#7dff7a']]) {
+    lamps.beam(SHOPS[id].x, SHOPS[id].z, r, 34, color);
+    lamps.halo(SHOPS[id].x, 1, SHOPS[id].z, r * 3, color);
+  }
+  for (const b of LEADERBOARDS) lamps.beam(b.x, lineZ + 4, 12, 44, b.color);
+  lamps.beam(SHOPS.events.x, SHOPS.events.z, 12, 40, '#ffe14a');
+  for (const plot of PLOTS) {
+    const at = (lx, lz) => plotToWorld(plot, lx, lz);
+    const arena = at(PLOT.treadmill.x, PLOT.treadmill.z);
+    lamps.beam(arena.x, arena.z, ARENA.wall * PLOT_SCALE + 2, 30, '#ffe8a0');
+    for (const lx of [PLOT.penMinX, PLOT.penMaxX]) {
+      for (const lz of [-PLOT.penHalfZ, PLOT.penHalfZ]) {
+        const c = at(lx, lz);
+        lamps.beam(c.x, c.z, 3.4, 34, '#bfe8ff');
+        lamps.halo(c.x, 2, c.z, 12, '#bfe8ff');
+      }
+    }
+    for (const sign of [PLOT.treadmillSign, PLOT.penSign]) {
+      const c = at(sign.x + 1, sign.z);
+      lamps.beam(c.x, c.z, 6, 22, '#9fb8ff');
+    }
+  }
+  lamps.finish();
   // no wall dancers in this lobby (the video has none): a stand-in so the game loop stays the same
   const dancers = { setQuality() {}, update() {} };
-  return { plots, boardGlows: [], shine, chunks, nests: NESTS, dancers, setDojoClock };
+  return { plots, boardGlows: [], shine, chunks, nests: NESTS, dancers, setDojoClock, lamps, spawnPad };
 }

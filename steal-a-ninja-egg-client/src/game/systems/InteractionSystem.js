@@ -6,12 +6,12 @@ import { INVITE_RADIUS } from '../entities/InviteSpot.js';
 
 const INVITE_NEAR = 4; // the invite popup opens this far out from the pad's edge too
 import {
-  BIOMES, NESTS, PLOT, PLOTS, RANGE, RULES, SHOPS, WORLD, biomeAt, eggName, formatClock, formatNumber, inPen, nextTreadmill, plotToWorld,
+  BIOMES, GUARDIANS, MAX_PEN_LEVEL, NESTS, PLOT, PLOTS, RANGE, RULES, SHOPS, WORLD, biomeAt, biomeById, eggName, formatClock, formatNumber, inPen, penSlotOf, nextPenLevel, nextTreadmill, plotToWorld,
 } from '../../shared/gameData.js';
-import { TUTORIAL_PETS, TUTORIAL_SHOPS, TUTORIAL_TREADMILL_SECONDS } from '../../shared/progression.js';
+import { TUTORIAL_SHOPS, TUTORIAL_TREADMILL_SECONDS } from '../../shared/progression.js';
 
 const NEAR_EGG_HINT = 30;
-const SHOP_POPUPS = [['sell', 'Sell Shop'], ['trails', 'Trails Shop']];
+const SHOP_POPUPS = [['sell', 'Sell Shop'], ['trails', 'Trails Shop'], ['spin', 'Spin Shop']];
 const SHOP_OPEN_RANGE = 22;
 const FREE_PAD_RADIUS = 13;
 const _v = new THREE.Vector3();
@@ -89,7 +89,8 @@ export class InteractionSystem {
     let readySlot = -1;
     pen.forEach((e, i) => {
       if (e.left > 0 || readySlot >= 0) return;
-      const at = plotToWorld(plot, PLOT.eggSlots[i].x, PLOT.eggSlots[i].z);
+      const s = PLOT.eggSlots[penSlotOf(e, i)];
+      const at = plotToWorld(plot, s.x, s.z);
       if (distance(pos, at.x, at.z) < RANGE.slot) readySlot = i;
     });
     const sign = plotToWorld(plot, PLOT.treadmillSign.x, PLOT.treadmillSign.z);
@@ -97,11 +98,12 @@ export class InteractionSystem {
 
     const cap = meta.padCap || RULES.penSlots;
     if (carried.length && inPen(plot, pos.x, pos.z) && pen.length < cap) {
-      // in your own pen with an egg: hold E to put it down to grow (in the next free slot)
-      const at = plotToWorld(plot, PLOT.eggSlots[pen.length].x, PLOT.eggSlots[pen.length].z);
-      offer('place', 'Hold to Place', eggName(carried[0]), at.x, 6, at.z, () => game.room.send('place'), { id: `place${pen.length}`, holdMs: RULES.placeHoldMs });
+      // in your own pen with an egg: click (or press E) and it goes down in a random free nest to grow
+      const mid = plotToWorld(plot, (PLOT.penMinX + PLOT.penMaxX) / 2, 0);
+      offer('place', 'Click to Place', eggName(carried[0]), mid.x, 6, mid.z, () => game.room.send('place'), { id: `place${pen.length}` });
     } else if (readySlot >= 0) {
-      const at = plotToWorld(plot, PLOT.eggSlots[readySlot].x, PLOT.eggSlots[readySlot].z);
+      const rs = PLOT.eggSlots[penSlotOf(pen[readySlot], readySlot)];
+      const at = plotToWorld(plot, rs.x, rs.z);
       offer('hatch', 'Hold to Hatch', eggName(pen[readySlot]), at.x, 8, at.z, () => game.room.send('hatch', { i: readySlot }), { id: `h${readySlot}`, holdMs: RULES.hatchHoldMs });
     } else if (nearestEgg && carried.length < RULES.carryCap && nearestDist < (nearestEgg.egg.nest ? RANGE.steal : RANGE.pick)) {
       const { id, egg } = nearestEgg;
@@ -111,7 +113,7 @@ export class InteractionSystem {
       if (locked) {
         // a stage your speed is not good for yet: its eggs stay put (the server says no too)
         offer('locked', `Need ⚡ ${formatNumber(locked.speed)} Speed`, `${eggName(egg)} · ${locked.name}`, egg.x, 5, egg.z,
-          () => game.toast(`You need ${formatNumber(locked.speed)} Speed for ${locked.name}! Run on your Treadmill ⚡`, '#ff5a5a'), { id });
+          () => game.toast(`You need ${formatNumber(locked.speed)} Speed for ${locked.name}! Spin in your Arena ⚡`, '#ff5a5a'), { id });
       } else {
         offer(steal ? 'steal' : 'pick', steal ? 'STEAL' : 'Hold to Pick Up', `${eggName(egg)} · ${Number(egg.kg).toFixed(1)} kg`, egg.x, 5, egg.z,
           () => game.room.send('pick', { id }), { id, holdMs });
@@ -119,6 +121,14 @@ export class InteractionSystem {
     } else if (nextMill && distance(pos, sign.x, sign.z) < RANGE.sign) {
       offer('sign', me.treadmill === 'none' ? `Unlock $${formatNumber(nextMill.price)}` : `Upgrade $${formatNumber(nextMill.price)}`, nextMill.name, sign.x, 12, sign.z,
         () => game.room.send('buyTreadmill'));
+    } else {
+      // the Upgrade Pen board on the other side of the gate: one more egg slot
+      const penSign = plotToWorld(plot, PLOT.penSign.x, PLOT.penSign.z);
+      const nextPen = nextPenLevel(Math.min(MAX_PEN_LEVEL, me.penLevel || 1));
+      if (nextPen && distance(pos, penSign.x, penSign.z) < RANGE.sign) {
+        offer('sign', `Upgrade $${formatNumber(nextPen.price)}`, `Pen Lv. ${nextPen.level} · +1 Egg Slot`, penSign.x, 12, penSign.z,
+          () => game.room.send('buyPen'));
+      }
     }
     this.autoOpenShop(pos);
     this.walkOnPads(pos, meta);
@@ -128,113 +138,124 @@ export class InteractionSystem {
 
   // ---------------------------------------------------------------- the guide (the line at the top)
 
-  // The new-player guide, one step at a time (the line at the top + the arrows on the ground):
-  //   steal a first-stage egg -> carry it to your pen -> watch it grow -> hatch it (hold E)
-  //   -> visit each lobby shop -> buy your treadmill -> run on it -> again, until 3 animals
-  //   -> the second stage (or the treadmill until you are fast enough for it) -> done.
-  // After the guide: always the best stage for your speed.
+  // The new-player guide (the line at the top + the arrows on the ground), five steps in order:
+  //   1/5 steal an egg from the first stage   2/5 bring it to your pen and click to put it down
+  //   3/5 while it grows: unlock your training arena and stay in it TUTORIAL_TREADMILL_SECONDS
+  //   4/5 go back to the grown egg and hatch it   5/5 visit each lobby shop
+  // then out on the track: the highest stage your speed is good for. The guide always shows the
+  // first step not done yet, so whatever a player did before being told to (spun in the arena while
+  // carrying, hatched early, walked past a shop) is never asked for again.
   updateGuide({ me, carried, pen, pos, plot, nearestEgg, nearestDist, sign, meta }) {
     if (carried.length) this.markDone('steal');
     if (pen.length) this.markDone('pen');
     const penMiddle = plotToWorld(plot, (PLOT.penMinX + PLOT.penMaxX) / 2, 0);
     const tutorial = meta.tutorial || 'done';
-    const readyAt = pen.findIndex((e) => e.left <= 0);
-    const firstStagePets = (this.game.store.get().allPets || []).filter((p) => (p.egg || '') === BIOMES[0].id).length;
-    // the first round counts its steps (1/4 ... 4/4); the next rounds count the animals hatched
-    const stage = (n, of, text) => (tutorial === 'basics' ? `${n}/${of} · ${text}` : tutorial === 'loop' ? `Animals ${firstStagePets}/${TUTORIAL_PETS} · ${text}` : text);
+    const guiding = tutorial !== 'done';
+    const pets = (this.game.store.get().allPets || []).length;
+    if (pets > 0) this.markDone('hatch');
+    this.countArenaTime(me);
+    this.countShops();
+    const placed = this.isDone('pen') || pets > 0;
+    const num = (n, text) => (guiding && !placed ? `${n}/5 · ${text}` : text);
     let step;
     // carrying an egg: home first, whatever the step
-    if (carried.length && pos.z <= WORLD.lineZ) step = { text: stage(2, 4, 'Run back to your Pen with the Egg! 🏃'), guide: penMiddle };
-    else if (carried.length) step = { text: inPen(plot, pos.x, pos.z) && pen.length >= (meta.padCap || RULES.penSlots) ? 'Your pen is full! Hatch an egg first' : stage(2, 4, inPen(plot, pos.x, pos.z) ? 'Hold E to put the Egg in your Pen! 🥚' : 'Put the Egg in your Pen! 🥚'), guide: inPen(plot, pos.x, pos.z) ? null : penMiddle };
-    else if (readyAt >= 0) {
-      const at = plotToWorld(plot, PLOT.eggSlots[readyAt].x, PLOT.eggSlots[readyAt].z);
-      step = { text: stage(4, 4, 'Your Egg is ready! Hold E to open it 🐣'), guide: at };
-    } else if (pen.length && (tutorial === 'basics' || tutorial === 'loop' || (tutorial === 'done' && pos.z > WORLD.lineZ))) {
-      // the countdown of the egg that hatches first: during the guide, and after it whenever you are
-      // back in the lobby (out in the biomes the line says where to steal next)
+    if (carried.length && pos.z <= WORLD.lineZ) step = { text: num(2, 'Run back to your Pen with the Egg! 🏃'), guide: penMiddle };
+    else if (carried.length) {
+      const inside = inPen(plot, pos.x, pos.z);
+      step = inside && pen.length >= (meta.padCap || RULES.penSlots)
+        ? { text: 'Your pen is full! Hatch an egg first', guide: null }
+        : { text: num(2, inside ? 'Click to put the Egg in your Pen! 🥚' : 'Put the Egg in your Pen! 🥚'), guide: inside ? null : penMiddle };
+    } else if (guiding) {
+      step = this.tutorialStep(me, pos, plot, pen, sign, placed, pets);
+    } else {
+      step = this.freeStep(me, pos, plot, pen, nearestEgg, nearestDist);
+    }
+    this.guide = step.guide || null;
+    // slot 2 of the hotbar shows the egg in your hands by its guardian ("Brown Ninja Egg")
+    const held = carried[0] ? biomeById(carried[0].type) : null;
+    this.game.store.set({ objective: step.text, carried: carried.length, carriedName: held ? `${GUARDIANS[held.guardian]?.name || held.name} Egg` : '' });
+  }
+
+  // The guide's first step that is not done yet.
+  tutorialStep(me, pos, plot, pen, sign, placed, pets) {
+    const { game } = this;
+    // 1/5: steal an egg in the first stage (2/5, carrying it home, is handled by the caller)
+    if (!placed) return this.stealStep(me, pos, BIOMES[0], '1/5 · Steal an Egg from the first stage! Hold E 🥚');
+    // 3/5: the training arena, unlocked, and TUTORIAL_TREADMILL_SECONDS inside it
+    if (!this.isDone('arena')) {
+      const arena = plotToWorld(plot, PLOT.treadmill.x, PLOT.treadmill.z);
+      if (me.treadmill === 'none') {
+        const price = nextTreadmill('none')?.price || 0;
+        const growing = pen.some((e) => e.left > 0) ? 'While your Egg grows, unlock' : 'Unlock';
+        return { text: `3/5 · ${growing} your Training Arena! Click the green button ($${formatNumber(price)}) 🌀`, guide: sign };
+      }
+      const left = Math.max(1, Math.ceil(TUTORIAL_TREADMILL_SECONDS - (this.arenaTime || 0)));
+      return game.player.onTreadmill
+        ? { text: `3/5 · Stay in your Arena to get faster! ⚡ ${left}s`, guide: null }
+        : { text: `3/5 · Go into your Training Arena and stay ${left}s to get faster! 🌀`, guide: arena };
+    }
+    // 4/5: back to the egg once it has grown, and hatch it
+    if (pets === 0) {
+      if (!pen.length) return this.stealStep(me, pos, BIOMES[0], '4/5 · Steal another Egg and hatch it! 🥚');
+      const readyAt = pen.findIndex((e) => e.left <= 0);
+      const i = readyAt >= 0 ? readyAt : pen.reduce((best, e, k) => (e.left < pen[best].left ? k : best), 0);
+      const gs = PLOT.eggSlots[penSlotOf(pen[i], i)];
+      const at = plotToWorld(plot, gs.x, gs.z);
+      if (readyAt >= 0) return { text: '4/5 · Your Egg has grown! Go to it and hold E to hatch it 🐣', guide: at };
+      return { text: `4/5 · Your Egg is growing! 🥚 Hatches in ${formatClock(pen[i].left)}`, guide: distance(pos, at.x, at.z) > 25 ? at : null };
+    }
+    // 5/5: each lobby shop, the nearest one not visited yet
+    const left = TUTORIAL_SHOPS.filter(([id]) => !this.isDone(`shop:${id}`));
+    if (left.length) {
+      const [id, name, icon] = left.reduce((a, b) => (distance(pos, SHOPS[a[0]].x, SHOPS[a[0]].z) <= distance(pos, SHOPS[b[0]].x, SHOPS[b[0]].z) ? a : b));
+      const seen = TUTORIAL_SHOPS.length - left.length;
+      return { text: `5/5 · Visit the ${name}! ${icon} (${seen}/${TUTORIAL_SHOPS.length} shops)`, guide: SHOPS[id] };
+    }
+    // all done: out on the track
+    this.advance('done');
+    const best = this.bestBiome(me);
+    return this.stealStep(me, pos, best, `Guide done! 🎉 Your speed is good for ${best.name}. Go steal! 🥚`);
+  }
+
+  // After the guide: hatch what has grown, else the highest stage your speed is good for.
+  freeStep(me, pos, plot, pen, nearestEgg, nearestDist) {
+    const readyAt = pen.findIndex((e) => e.left <= 0);
+    if (readyAt >= 0) {
+      const rs = PLOT.eggSlots[penSlotOf(pen[readyAt], readyAt)];
+      return { text: 'Your Egg is ready! Hold E to open it 🐣', guide: plotToWorld(plot, rs.x, rs.z) };
+    }
+    if (pen.length && pos.z > WORLD.lineZ) {
+      // back in the lobby: the countdown of the egg that hatches first (out on the track the line says where to steal)
       const i = pen.reduce((best, e, k) => (e.left < pen[best].left ? k : best), 0);
-      const at = plotToWorld(plot, PLOT.eggSlots[i].x, PLOT.eggSlots[i].z);
       const clock = formatClock(pen[i].left);
       const text = pen.length > 1 ? `${pen.length} Eggs growing! 🥚 Next hatches in ${clock}` : `Your Egg is growing! 🥚 Hatches in ${clock}`;
-      step = tutorial === 'done'
-        ? { text, guide: this.stealStep(me, pos).guide }
-        : { text: stage(3, 4, text), guide: distance(pos, at.x, at.z) > 25 ? at : null };
-    } else if (tutorial === 'basics') {
-      step = this.stealStep(me, pos, BIOMES[0], stage(1, 4, 'Steal an Egg from the first stage! Hold E 🥚'));
-    } else if (tutorial === 'shops') {
-      step = this.shopsStep();
-    } else if (tutorial === 'buyTreadmill') {
-      step = { text: me.treadmill === 'none' ? 'Buy your first Treadmill! Walk to its sign and click 🏃' : 'Go to your Treadmill! 🏃', guide: sign };
-      if (me.treadmill !== 'none') this.advance('treadmill');
-    } else if (tutorial === 'treadmill') {
-      step = this.treadmillStep(plot, () => this.advance('loop'));
-    } else if (tutorial === 'loop') {
-      step = this.loopStep(me, pos, plot, firstStagePets);
-    } else if (tutorial === 'stage2') {
-      step = this.stage2Step(me, pos, plot, carried);
-    } else if (nearestEgg?.egg.nest && nearestDist < NEAR_EGG_HINT && this.lockedStage(me, nearestEgg.egg.nest)) {
+      return { text, guide: this.stealStep(me, pos).guide };
+    }
+    if (nearestEgg?.egg.nest && nearestDist < NEAR_EGG_HINT && this.lockedStage(me, nearestEgg.egg.nest)) {
       // too fast a stage for me: back to the one my speed is good for
       const locked = this.lockedStage(me, nearestEgg.egg.nest);
-      step = { text: `Too fast for you! Need ${formatNumber(locked.speed)} Speed ⚡ Go to ${this.bestBiome(me).name}`, guide: this.stealStep(me, pos).guide };
-    } else if (nearestEgg?.egg.nest && nearestDist < NEAR_EGG_HINT) step = { text: 'Hold E to steal the Egg! 🥚', guide: null };
-    else step = this.stealStep(me, pos);
-    this.guide = step.guide || null;
-    this.game.store.set({ objective: step.text, carried: carried.length });
+      return { text: `Too fast for you! Need ${formatNumber(locked.speed)} Speed ⚡ Go to ${this.bestBiome(me).name}`, guide: this.stealStep(me, pos).guide };
+    }
+    if (nearestEgg?.egg.nest && nearestDist < NEAR_EGG_HINT) return { text: 'Hold E to steal the Egg! 🥚', guide: null };
+    const best = this.bestBiome(me);
+    return this.stealStep(me, pos, best, best === BIOMES[0] ? 'Steal an Egg!' : `Your speed is good for ${best.name}! Steal an Egg there 🥚`);
   }
 
-  // Each lobby shop in turn; it counts once its popup has opened (walking up to it opens it).
-  shopsStep() {
+  // Time in the (unlocked) arena while the guide runs, whatever the step; done once it reaches
+  // TUTORIAL_TREADMILL_SECONDS.
+  countArenaTime(me) {
+    const now = performance.now();
+    const dt = Math.min(0.25, (now - (this.lastArenaAt || now)) / 1000);
+    this.lastArenaAt = now;
+    if (this.isDone('arena') || me.treadmill === 'none' || !this.game.player.onTreadmill) return;
+    this.arenaTime = (this.arenaTime || 0) + dt;
+    if (this.arenaTime >= TUTORIAL_TREADMILL_SECONDS) this.markDone('arena');
+  }
+
+  // A shop counts as visited once its popup has opened (walking up to it opens it), at any time.
+  countShops() {
     const popup = this.game.store.get().popup;
     for (const [id] of TUTORIAL_SHOPS) if (popup === id) this.markDone(`shop:${id}`);
-    const next = TUTORIAL_SHOPS.findIndex(([id]) => !this.isDone(`shop:${id}`));
-    if (next < 0) {
-      this.advance('buyTreadmill');
-      return { text: 'Now buy your first Treadmill! 🏃', guide: null };
-    }
-    const [id, name, icon] = TUTORIAL_SHOPS[next];
-    return { text: `Shop ${next + 1}/${TUTORIAL_SHOPS.length} · Visit the ${name}! ${icon}`, guide: SHOPS[id] };
-  }
-
-  // Run on the treadmill for TUTORIAL_TREADMILL_SECONDS (counted while you are on it), then done().
-  treadmillStep(plot, done, label = 'Run on your Treadmill to get faster! ⚡') {
-    const { game } = this;
-    const now = performance.now();
-    const dt = Math.min(0.25, (now - (this.lastTaskAt || now)) / 1000);
-    this.lastTaskAt = now;
-    if (game.player.onTreadmill) this.treadTime = (this.treadTime || 0) + dt;
-    const left = Math.ceil(TUTORIAL_TREADMILL_SECONDS - (this.treadTime || 0));
-    if (left <= 0) {
-      this.treadTime = 0;
-      done();
-    }
-    const at = plotToWorld(plot, PLOT.treadmill.x, PLOT.treadmill.z);
-    return game.player.onTreadmill
-      ? { text: `Keep running! ⚡ ${Math.max(0, left)}s`, guide: null }
-      : { text: label, guide: at };
-  }
-
-  // steal -> grow -> hatch -> treadmill, round and round, until TUTORIAL_PETS first-stage animals
-  loopStep(me, pos, plot, pets) {
-    if (pets >= TUTORIAL_PETS) {
-      this.advance('stage2');
-      return { text: 'Great! Time for the next stage!', guide: null };
-    }
-    // a new animal since the last run: on the treadmill again first
-    if (this.loopPets === undefined) this.loopPets = pets;
-    if (pets > this.loopPets) { this.loopPets = pets; this.needTread = true; }
-    const count = `Animals ${pets}/${TUTORIAL_PETS}`;
-    if (this.needTread) return this.treadmillStep(plot, () => { this.needTread = false; }, `${count} · Run on your Treadmill! ⚡`);
-    return this.stealStep(me, pos, BIOMES[0], `${count} · Steal another Egg! 🥚`);
-  }
-
-  // fast enough for the second stage: steal there; otherwise the treadmill until you are
-  stage2Step(me, pos, plot, carried) {
-    const second = BIOMES[1];
-    if (carried.some((e) => e.type === second.id)) this.advance('done');
-    if (me.speed >= second.speed) return this.stealStep(me, pos, second, `You're fast enough! Steal an Egg in ${second.name}! 🍬`);
-    const at = plotToWorld(plot, PLOT.treadmill.x, PLOT.treadmill.z);
-    const text = `Get to ${formatNumber(second.speed)} Speed for ${second.name}! ⚡ ${formatNumber(me.speed)}/${formatNumber(second.speed)}`;
-    return { text, guide: this.game.player.onTreadmill ? null : at };
   }
 
   // An egg to steal: from the given stage (or the best one your speed is good for), the nearest one.
@@ -335,15 +356,10 @@ export class InteractionSystem {
     this.game.room.send('drop');
   }
 
-  // A click: the treadmill sign when you stand at it, otherwise a swing of the bat.
+  // A click in the world: only a board (buy) or the egg into your pen. It never spins the player: the
+  // whirlwind is only the Spin button (or 1).
   click() {
-    if (this.action?.kind === 'sign') return this.action.run();
-    const now = performance.now();
-    if (now - this.lastSwing < RULES.batCooldownMs) return;
-    this.lastSwing = now;
-    this.game.player.punch();
-    this.game.audio.swing();
-    this.game.room.send('swing');
+    if (this.action?.kind === 'sign' || this.action?.kind === 'place') this.action.run();
   }
 
   // kept for the mobile / HUD buttons of the old auto-swing

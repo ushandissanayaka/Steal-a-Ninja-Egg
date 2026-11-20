@@ -193,6 +193,8 @@
 .profile-sound { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: none; border-radius: 50%; background: transparent; cursor: pointer; }
 .profile-sound:hover { background: rgba(255, 255, 255, 0.1); }
 .profile-split { width: 2px; height: 26px; background: rgba(255, 255, 255, 0.18); }
+.profile-signal { display: flex; align-items: flex-end; gap: 5px; }
+.profile-signal em { font-size: 17px; font-weight: 800; font-style: normal; color: #c8ccd4; line-height: 1; }
 .profile-gems { min-width: 18px; font-size: 21px; font-weight: 800; font-style: italic; color: #fff; }
 @media (max-width: 640px) {
   .profile-card { top: calc(var(--boxity-ui-top, 0px) + 6px); }
@@ -226,7 +228,7 @@
 .toggle i { width: 44px; height: 24px; border: 2px solid #14141a; border-radius: 6px; background: linear-gradient(90deg, #3a3d45 50%, #2e7a2a 50%); }
 .toggle.on i { background: linear-gradient(90deg, #3a3d45 50%, #5ff04a 50%); }
 .toggle span { font-size: 18px; font-weight: 700; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill; }
-.slow-mode, .auto-swing, .tree-bar { display: none; }
+.auto-swing, .tree-bar { display: none; }
 
 .drop-btn {
   position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
@@ -241,3 +243,72 @@
 .mill-track { height: 14px; border-radius: 8px; border: 2px solid #14141a; background: rgba(20, 20, 26, 0.7); overflow: hidden; }
 .mill-track i { display: block; height: 100%; background: linear-gradient(90deg, #35b8ff, #7fe8ff); }
 .mill-mult { margin-top: 2px; font-size: 18px; font-weight: 800; color: #ffd21f; -webkit-text-stroke: 1px #14141a; paint-order: stroke fill; }
+
+/* the training arena's "Exit Arena" button (like the video): big red, under the speed bar */
+/* the training arena's "Exit Arena" button (like the video): a big bright red slab with a dark red
+   frame, a faint dotted texture, and bold white letters with a thick black outline */
+.exit-arena {
+  pointer-events: auto; margin-top: 12px; min-width: min(320px, 70vw); padding: 10px 40px; cursor: pointer;
+  border: 4px solid #5a0008; border-radius: 6px;
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.08) 1px, transparent 1.6px) 0 0 / 7px 7px,
+    linear-gradient(#ff3a3a, #e0101e 55%, #c00814);
+  box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.28), inset 0 -4px 0 rgba(0, 0, 0, 0.25), 0 5px 0 #3a0006, 0 7px 12px rgba(0, 0, 0, 0.35);
+  color: #fff; font: 800 clamp(26px, 3.2vw, 40px) "Fredoka", sans-serif; letter-spacing: 0.5px;
+  -webkit-text-stroke: 3px #14141a; paint-order: stroke fill;
+}
+.exit-arena:hover { filter: brightness(1.08); }
+.exit-arena:active { transform: translateY(4px); box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.28), 0 1px 0 #3a0006; }
+
+/* ---------------------------------------------------------------- the video's HUD (only these on screen) */
+/* left: Shop, Index and the Slow Mode switch under them */
+.hud .side-menu .slow-mode { position: static; margin-top: 4px; scale: none; }
+.hud .side-menu .slow-mode span { font-size: 20px; }
+/* right: two square picture buttons */
+.hud .side-tab { width: 76px; height: 76px; border-radius: 6px; border: 3px solid #3a1a10; box-shadow: 0 3px 0 #14141a; }
+.hud .side-tab.pets { background: radial-gradient(circle at 50% 45%, #ff6a5a, #c81e2a 70%); }
+.hud .side-tab.weapons { background: radial-gradient(circle at 50% 45%, #ffb36a, #e0702a 70%); }
+.hud .side-tab svg { transform: scale(1.3); }
+/* the hint line sits just above the hotbar, white with a dark outline */
+.hud .objective {
+  top: auto; bottom: 108px; background: none; padding: 0 12px; font-size: clamp(18px, 2.3vw, 32px); font-weight: 800;
+  -webkit-text-stroke: 2px #14141a; paint-order: stroke fill;
+}
+/* bottom left: the speed (light blue) and the cash (green), big and italic */
+.hud .stats { left: 14px; bottom: 10px; gap: 0; }
+.hud .stat > span { font-size: 56px; font-weight: 800; font-style: italic; -webkit-text-stroke: 2px #14141a; }
+.hud .stat.speed > span { color: #5fd0ff; }
+.hud .stat.cash > span, .hud .stat small { color: #6fe83a; font-weight: 800; font-style: italic; -webkit-text-stroke: 2px #14141a; }
+.hud .stat small { font-size: 52px; margin-left: 8px; }
+.hud .stat-plus { width: 30px; height: 30px; right: -2px; bottom: 2px; border-radius: 4px; background: linear-gradient(#ffd25a, #f2a01a); }
+/* bottom middle: two dark slots */
+.hud .hotbar { align-items: flex-end; gap: 6px; bottom: 6px; }
+.hud .hot-slot { box-sizing: border-box; justify-content: flex-end; width: 74px; height: 74px; border: 2px solid rgba(255, 255, 255, 0.25); border-radius: 4px; background: rgba(30, 32, 38, 0.72); }
+.hud .hot-slot.hot-empty { background: rgba(30, 32, 38, 0.45); }
+.hud .hot-slot span { font-size: 13px; }
+/* bottom right: the moon on a dark bar running off the edge */
+.hud .night-clock {
+  right: 0; bottom: 8px; padding: 6px 70px 6px 10px; gap: 10px;
+  background: linear-gradient(90deg, transparent, rgba(20, 24, 20, 0.55) 18%, rgba(20, 24, 20, 0.8));
+  font-size: clamp(22px, 2.6vw, 38px);
+}
+
+/* the Spin slot: a raised 3D button that glows blue while you are a whirlwind */
+.hud .spin-slot {
+  background: linear-gradient(#4a5468, #262b38); box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), inset 0 -3px 0 rgba(0, 0, 0, 0.35), 0 3px 0 #14141a;
+}
+.hud .spin-slot svg { filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.45)); transition: transform 0.15s; }
+.hud .spin-slot:hover svg { transform: scale(1.08) rotate(-6deg); }
+.hud .spin-slot.on { background: linear-gradient(#58b8ff, #1f6ad6); outline: 3px solid #bfe8ff; }
+.hud .spin-slot.on svg { animation: spin-wobble 0.6s linear infinite; }
+@keyframes spin-wobble { 0% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } 100% { transform: rotate(-5deg); } }
+
+/* tips for new players: big letters low on the screen, above the hint line, never in the way */
+.tip-banner {
+  position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); max-width: 86vw; text-align: center; pointer-events: none;
+  padding: 8px 26px; border-radius: 14px; background: rgba(16, 18, 30, 0.62);
+  font-size: clamp(20px, 2.8vw, 36px); font-weight: 800; color: #ffe46a; -webkit-text-stroke: 1.5px #14141a; paint-order: stroke fill;
+  animation: tip-in 0.4s ease-out, tip-out 0.6s ease-in 6.4s forwards;
+}
+@keyframes tip-in { from { transform: translate(-50%, 20px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+@keyframes tip-out { to { opacity: 0; } }

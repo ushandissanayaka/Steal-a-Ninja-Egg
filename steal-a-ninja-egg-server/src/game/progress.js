@@ -2,20 +2,56 @@
 // pet slots and equipping, the index rewards, rebirths and the free gift. Each action checks the
 // price against the player's own cash and returns { ok, text } for a message to the player.
 
-import { BIOMES, EGGS, PETS, biomeIndex, petIncome, rollEgg, rollPet } from '../shared/gameData.js';
+import { BIOMES, EGGS, PETS, TREADMILLS, biomeIndex, petIncome, rollEgg, rollPet } from '../shared/gameData.js';
 import {
   GIFT_MS, INDEX_AREAS, MAX_PETS, OFFLINE, offlineAmount, offlineTriplePrice, PASSES, POTIONS, POTION_MAX_MS, POTION_MS, POTION_ORDER, SLOTS, SPEED_PACKS,
   TRAILS, TUTORIAL_STEPS, petSellValue, trailById,
   areaById, areaPets, bundlePrice, doubleSpeedPrice, featuredEgg, featuredPrice, perks, petFromArea, potionPrice,
   rebirthNeed, slotPrice,
-  DAILY, MONEY_PACKS, STARTER_PACK, WEAPONS, dailyState, dayNumber, indexPetReward, weaponById,
-} from '../shared/progression.js';
+  DAILY, MONEY_PACKS, STARTER_PACK, WEAPONS, dailyState, dayNumber, indexPetReward, weaponById, SPIN_STYLES, spinById } from '../shared/progression.js';
 
 const fail = (text) => ({ ok: false, text });
 const done = (text) => ({ ok: true, text });
 
+// ------------------------------------------------------------------ achievements
+
+// A player's achievements: records that only ever go up, saved with the profile (so selling a pet, a
+// rebirth or a morning reset never takes one away) and shown on their Boxity profile (statReporter).
+//   bestStage   the furthest stage they stole an egg from or hatched one of (1-10)
+//   bestSpeed   the most Speed they ever had (a rebirth does not lower it)
+//   bestArena   the best training arena they unlocked (1 Wooden .. 6 Ice Peak)
+//   bestPen     the highest Upgrade Pen level
+//   spinStyles  how many whirlwind styles they own
+//   bestStreak  the longest daily-reward streak
+//   escapes     how many times they got away from a guardian with its egg
+//   kunoichi    female ninjas hatched
+export const ACHIEVEMENT_KEYS = ['bestStage', 'bestSpeed', 'bestArena', 'bestPen', 'spinStyles', 'bestStreak', 'escapes', 'kunoichi'];
+export function updateAchievements(profile) {
+  const a = profile.achievements && typeof profile.achievements === 'object' && !Array.isArray(profile.achievements) ? profile.achievements : {};
+  for (const k of ACHIEVEMENT_KEYS) a[k] = Number.isFinite(a[k]) && a[k] >= 0 ? Math.floor(a[k]) : 0;
+  const up = (k, v) => { if (Number.isFinite(v) && v > a[k]) a[k] = Math.floor(v); };
+  up('bestStage', (profile.pets || []).reduce((best, pet) => Math.max(best, biomeIndex(pet.egg || PETS[pet.id]?.biome) + 1), 0));
+  up('bestSpeed', profile.speed);
+  up('bestArena', TREADMILLS.findIndex((t) => t.id === profile.treadmill));
+  up('bestPen', profile.penLevel || 1);
+  up('spinStyles', Array.isArray(profile.spins) ? profile.spins.length : 0);
+  up('bestStreak', profile.daily?.streak || 0);
+  profile.achievements = a;
+  return a;
+}
+// one more of a counting achievement (escapes, kunoichi), or a new best for a record (bestStage)
+export function addAchievement(profile, key, amount = 1) {
+  const a = updateAchievements(profile);
+  a[key] = (a[key] || 0) + amount;
+}
+export function reachAchievement(profile, key, value) {
+  const a = updateAchievements(profile);
+  if (Number.isFinite(value) && value > a[key]) a[key] = Math.floor(value);
+}
+
 // Fills in the progress fields on older saves.
 export function normalizeProgress(profile, now = Date.now()) {
+  updateAchievements(profile); // the records (older saves get them from what they have now)
   if (!profile.passes || typeof profile.passes !== 'object' || Array.isArray(profile.passes)) profile.passes = {};
   if (!profile.boosts || typeof profile.boosts !== 'object') profile.boosts = {};
   profile.rebirths = Number.isInteger(profile.rebirths) ? profile.rebirths : 0;
@@ -25,6 +61,9 @@ export function normalizeProgress(profile, now = Date.now()) {
   profile.giftAt = Number.isFinite(profile.giftAt) ? profile.giftAt : now + GIFT_MS;
   profile.trails = (Array.isArray(profile.trails) ? profile.trails : []).filter((id) => trailById(id));
   if (!profile.trails.includes(profile.trail)) profile.trail = '';
+  // spin styles: the starter one is always owned
+  profile.spins = [...new Set(['breeze', ...(Array.isArray(profile.spins) ? profile.spins : [])])].filter((id) => SPIN_STYLES.some((s) => s.id === id));
+  if (!profile.spins.includes(profile.spin)) profile.spin = 'breeze';
   profile.locked = Array.isArray(profile.locked) ? profile.locked : [];
   // the index pays per pet found; areas claimed before that count as all their pets claimed
   if (!Array.isArray(profile.claimedPets)) {
@@ -53,7 +92,7 @@ export function normalizeProgress(profile, now = Date.now()) {
 
 export const passList = (profile) => Object.keys(profile.passes).filter((id) => profile.passes[id] && PASSES[id]);
 const boostActive = (profile, now) => (id) => (profile.boosts[id] || 0) > now;
-export const perksOf = (profile, now = Date.now()) => perks(passList(profile), boostActive(profile, now), profile.rebirths, profile.trail);
+export const perksOf = (profile, now = Date.now()) => perks(passList(profile), boostActive(profile, now), profile.rebirths, profile.trail, profile.penLevel, profile.spin);
 
 export const equippedPets = (profile) => {
   const on = new Set(profile.equipped);
@@ -91,6 +130,8 @@ export function metaOf(profile, now, stageLeft = 0, extra = {}) {
     stageLeft,
     trails: profile.trails,
     trail: profile.trail,
+    spins: profile.spins,
+    spin: profile.spin,
     locked: profile.locked,
     tutorial: profile.tutorial,
     guideDone: profile.guideDone,
@@ -107,6 +148,8 @@ export function addPet(profile, pet) {
   pet.uid = ++profile.petSeq;
   profile.petsHatched = (profile.petsHatched ?? profile.pets.length) + 1; // lifetime count, for the Boxity profile
   profile.pets.push(pet);
+  if (/Kunoichi/.test(PETS[pet.id]?.name || '')) addAchievement(profile, 'kunoichi');
+  updateAchievements(profile);
   if (!profile.discovered.includes(pet.id)) profile.discovered.push(pet.id);
   if (profile.equipped.length < profile.slots) profile.equipped.push(pet.uid);
   else {
@@ -361,6 +404,7 @@ export function rebirth(profile) {
     .sort((a, b) => (on.has(a.uid) - on.has(b.uid)) || a.cash - b.cash);
   if (!candidates.length) return fail(`You need a pet from ${area.name}`);
   const pet = candidates[0];
+  updateAchievements(profile); // keep the records the rebirth is about to reset
   profile.pets.splice(profile.pets.indexOf(pet), 1);
   profile.equipped = profile.equipped.filter((uid) => uid !== pet.uid);
   profile.cash = 0;
@@ -394,6 +438,24 @@ export function markGuideDone(profile, key) {
   if (typeof key !== 'string' || !key || key.length > 40 || profile.guideDone.includes(key) || profile.guideDone.length >= 200) return { ok: false, text: '' };
   profile.guideDone.push(key);
   return { ok: true, text: '' };
+}
+
+// ------------------------------------------------------------------ spin styles
+
+export function buySpin(profile, id) {
+  const style = SPIN_STYLES.find((s) => s.id === id);
+  if (!style) return fail('Unknown spin');
+  if (profile.spins.includes(id)) return fail('You already own it');
+  if (!spend(profile, style.price)) return fail('Not enough cash');
+  profile.spins.push(id);
+  profile.spin = id;
+  return done(`${style.name} equipped! x${style.mult} Spin Speed`);
+}
+
+export function equipSpin(profile, id) {
+  if (!profile.spins.includes(id)) return fail('You do not own it');
+  profile.spin = id;
+  return done(`${spinById(id).name} equipped!`);
 }
 
 // ------------------------------------------------------------------ trails

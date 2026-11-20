@@ -2,15 +2,17 @@ import * as THREE from 'three';
 import { BloxityAvatar } from './BloxityAvatar.js';
 import { createNameTag } from './NameTag.js';
 import { createEgg } from './Egg.js';
-import { createAxeMesh } from './Axe.js';
 import { TrailRibbon } from './Trail.js';
-import { trailById } from '../../shared/progression.js';
-import { EGG_SIZES } from '../../shared/gameData.js';
+import { Tornado, WhirlTrail } from './Tornado.js';
+import { spinById, spinTier, trailById } from '../../shared/progression.js';
+import { EGG_SIZES, WORLD } from '../../shared/gameData.js';
 
 const KNOCKBACK_SECONDS = 0.45;
 const JUMP_VELOCITY = 38;
 const TAG_HEIGHT = 5.9;
 const TREADMILL_JOG_SPEED = 3;
+const SPIN_SPEED = 16;      // radians a second, spinning in the training arena
+const TORNADO_HEIGHT = 12;     // the player's whirlwind: much bigger than the player (like the video)
 // The held egg sits on both hands, out in front of the chest (the character faces +Z).
 const HELD_EGG = new THREE.Vector3(0, 3.95, 2.9); // on top of the hands, a little in front of them
 const HELD_EGG_SCALE = 1.05;
@@ -35,7 +37,53 @@ class Character {
     this.carriedKey = '';
     this.liftT = LIFT_SECONDS;
     this.trail = new TrailRibbon(); // added to the scene by Game
+    // the whirlwind the player turns into (like the video): in the training arena, while carrying a
+    // stolen egg out on the track, and whenever they choose to (the Spin button)
+    this.setSpinStyle('breeze');
     this.setName(name);
+  }
+
+  // The look of their whirlwind (their spin style from the Spin Shop): every style up the list is a
+  // bigger whirlwind.
+  setSpinStyle(id) {
+    const style = spinById(id);
+    if (this.tornado && this.spinStyle === style.id) return;
+    const k = this.tornado?.k || 0;
+    this.tornado?.dispose();
+    this.spinStyle = style.id;
+    this.tornado = new Tornado(TORNADO_HEIGHT * (1 + spinTier(style.id) * 0.06), style);
+    this.tornado.k = k;
+    this.root.add(this.tornado.root);
+    this.whirlTrail?.dispose(); // made again in the new colours (see updateWhirl)
+    this.whirlTrail = null;
+  }
+
+  // Is the character a whirlwind right now? (anim says so for other players: 'spin' / 'tornado')
+  get isTornado() {
+    return (this.anim === 'spin' || this.anim === 'tornado') && !this.shatterT;
+  }
+
+  // The whirlwind form: the character hides inside a spinning tornado (it grows in round them as
+  // they vanish, and they pop back out as it shrinks away). A quick Spin move (a click) is a short
+  // burst of it.
+  updateWhirl(dt) {
+    // the smoke and dust left behind the whirlwind (in the world, so it is made once the player is in it)
+    if (!this.whirlTrail && this.root.parent) {
+      const style = spinById(this.spinStyle);
+      this.whirlTrail = new WhirlTrail(this.root.parent, this.tornado.height, style.colors);
+    }
+    this.whirlTrail?.update(dt, this.root.position, this.tornado.k);
+    const on = this.isTornado;
+    this.tornado.update(dt, on);
+    const k = this.tornado.k;
+    // the body shrinks into the wind and comes back out of it
+    this.avatar.root.visible = (!this.shatterT || this.shatterT <= POP_SECONDS) && k < 0.85;
+    if (!this.shatterT) this.avatar.root.scale.setScalar(Math.max(0.01, 1 - k));
+    // a carried egg floats in the middle of the whirlwind, turning
+    if (k > 0.05) {
+      this.carriedGroup.position.set(0, 2.2 + Math.sin(this.tornado.t * 3) * 0.3, 0);
+      this.carriedGroup.rotation.y += dt * 6;
+    } else this.carriedGroup.rotation.y = 0;
   }
 
   setName(name) {
@@ -61,10 +109,12 @@ class Character {
       this.carriedGroup.add(mesh);
     });
     this.avatar.holding = eggs.length > 0;
+    this.carrying = eggs.length > 0;
     if (eggs.length > before) this.liftT = 0;
   }
 
   updateCarried(dt) {
+    if (this.tornado?.k > 0.05) return; // inside the whirlwind (see updateWhirl)
     this.liftT = Math.min(LIFT_SECONDS, this.liftT + dt);
     const k = this.liftT / LIFT_SECONDS;
     const ease = 1 - (1 - k) ** 3;
@@ -76,9 +126,8 @@ class Character {
     );
   }
 
-  punch() {
-    this.avatar.punch();
-  }
+  // (another player's spin attack: no quick whirl is shown, only their whirlwind form)
+  punch() {}
 
   setTrail(id) {
     this.trail.setStyle(trailById(id));
@@ -104,10 +153,10 @@ class Character {
     if (this.shatterT === 0) this.avatar.root.scale.setScalar(1);
   }
 
+  // Nothing is held in the hands in this game (the bat was removed); the weapon only sets how long a
+  // Spin dazes a guardian (on the server).
   setAxe(id) {
-    if (id === this.axeId) return;
     this.axeId = id;
-    this.avatar.setTool(createAxeMesh(id));
   }
 }
 
@@ -165,7 +214,10 @@ export class LocalPlayer extends Character {
     this.body.vel.x += (wx * WALK_SPEED - this.body.vel.x) * k;
     this.body.vel.z += (wz * WALK_SPEED - this.body.vel.z) * k;
 
-    if (input.consumeJump() && this.body.grounded && !this.frozen) {
+    const jump = input.consumeJump();
+    // Space in the arena: out through its door (like the video)
+    if (jump && this.arena) this.exitArena();
+    else if (jump && this.body.grounded && !this.frozen) {
       this.body.vel.y = JUMP_VELOCITY;
       this.justJumped = true; // Game plays the jump sound
       this.body.grounded = false;
@@ -176,13 +228,28 @@ export class LocalPlayer extends Character {
 
     let speed = Math.hypot(this.body.vel.x, this.body.vel.z);
     const belt = physics.surfaceAt(this.body.pos.x, this.body.pos.z);
-    this.onTreadmill = !!belt && this.body.grounded && len <= 0.05;
+    // the training arena: only its floor counts (not the base round the wall)
+    // (and only your own arena once it is unlocked: Game sets canSpin, like the server's check)
+    const onFloor = belt && !belt.floor && (!belt.round || (Math.hypot(this.body.pos.x - belt.x, this.body.pos.z - belt.z) <= belt.floorR
+      && (!this.canSpin || this.canSpin(belt))));
+    this.onTreadmill = !!onFloor && this.body.grounded && len <= 0.05;
+    this.arena = this.onTreadmill && belt.round ? belt : null;
 
-    if (!this.body.grounded) this.anim = this.body.vel.y > 0 ? 'jump' : 'fall';
+    // a whirlwind: carrying a stolen egg out on the track (back at the start it turns back into the
+    // player, the egg up in their hands), or because they chose to (the Spin button)
+    const onTrack = this.body.pos.z < WORLD.lineZ;
+    this.carryTornado = this.carrying && onTrack;
+    if (this.arena) this.anim = 'spin';
+    else if (this.carryTornado || this.manualTornado) this.anim = 'tornado';
+    else if (!this.body.grounded) this.anim = this.body.vel.y > 0 ? 'jump' : 'fall';
     else this.anim = this.onTreadmill || (speed > 0.8 && len > 0) ? 'walk' : 'idle';
 
-    // standing on a treadmill: face the console and jog slowly on the spot
-    if (this.onTreadmill) {
+    if (this.arena) {
+      // standing still in the arena: spin on the spot in a whirlwind
+      this.ry += SPIN_SPEED * dt;
+      speed = 0;
+    } else if (this.onTreadmill) {
+      // standing on a treadmill: face the console and jog slowly on the spot
       this.ry = lerpAngle(this.ry, belt.ry, 1 - Math.exp(-dt * 10));
       speed = TREADMILL_JOG_SPEED;
     }
@@ -205,7 +272,34 @@ export class LocalPlayer extends Character {
     this.avatar.update(dt);
     this.updateCarried(dt);
     this.updateShatter(dt);
+    this.updateWhirl(dt);
     this.trail.update(dt, this.root.position);
+  }
+
+  // The Spin button: turn into a whirlwind, or back into the player.
+  toggleTornado() {
+    this.manualTornado = !this.manualTornado;
+    return this.manualTornado;
+  }
+
+  // The "Exit Arena" button: hop out through the arena's doorway.
+  exitArena() {
+    const a = this.arena;
+    if (!a) return;
+    const dx = Math.cos(a.doorAngle), dz = Math.sin(a.doorAngle);
+    this.body.pos.set(a.x + dx * (a.r + 3), 0, a.z + dz * (a.r + 3));
+    this.body.vel.set(0, 0, 0);
+    this.ry = Math.atan2(dx, dz);
+    // out of the whirlwind at once: the player's own shape again (no shrinking wind left behind)
+    this.manualTornado = false;
+    this.arena = null;
+    this.onTreadmill = false;
+    this.anim = 'idle';
+    this.tornado.k = 0;
+    this.tornado.root.visible = false;
+    this.avatar.root.visible = true;
+    this.avatar.root.scale.setScalar(1);
+    this.exitedAt = performance.now();
   }
 }
 
@@ -234,6 +328,7 @@ export class RemotePlayer extends Character {
       this.swingKey = s.swing;
     }
     this.setTrail(RemotePlayer.trails ? s.trail : '');
+    this.setSpinStyle(s.spin);
     if (s.emote && s.emote !== this.emoteKey) {
       const first = this.emoteKey === undefined; // joining: do not replay an old emote
       this.emoteKey = s.emote;
@@ -245,12 +340,15 @@ export class RemotePlayer extends Character {
     const before = this.root.position.clone();
     if (this.root.position.distanceTo(this.target) > 30) this.root.position.copy(this.target);
     else this.root.position.lerp(this.target, 1 - Math.exp(-dt * RemotePlayer.smoothing));
-    this.root.rotation.y = lerpAngle(this.root.rotation.y, this.targetRy, 1 - Math.exp(-dt * RemotePlayer.smoothing));
+    // spinning in their arena: turn on the spot here (their facing comes too seldom to show the spin)
+    if (this.anim === 'spin') this.root.rotation.y += SPIN_SPEED * dt;
+    else this.root.rotation.y = lerpAngle(this.root.rotation.y, this.targetRy, 1 - Math.exp(-dt * RemotePlayer.smoothing));
     this.avatar.anim = this.anim;
     this.avatar.speed = dt > 0 ? before.distanceTo(this.root.position) / dt : 0;
     this.avatar.update(dt);
     this.updateCarried(dt);
     this.updateShatter(dt);
+    this.updateWhirl(dt);
     this.trail.update(dt, this.root.position);
     // Other players never cast shadows (only your own character does). Their avatar parts,
     // accessories, bat and held eggs load in at different times, so this is re-checked often.
@@ -263,6 +361,7 @@ export class RemotePlayer extends Character {
 
   dispose() {
     this.trail.dispose();
+    this.whirlTrail?.dispose();
     this.root.parent?.remove(this.root);
     this.avatar.dispose();
   }

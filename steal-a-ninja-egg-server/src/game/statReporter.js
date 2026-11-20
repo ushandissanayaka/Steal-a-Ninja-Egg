@@ -2,10 +2,7 @@
 // Values always come from server-owned profiles, never from client packets.
 
 import { allProfiles } from './profiles.js';
-import { BIOMES, PETS, TREADMILLS, biomeIndex } from '../shared/gameData.js';
-
-// the rarest animal of every stage from the fifth on is a giant (taller than the walls)
-const GIANTS = new Set(BIOMES.slice(4).map((b) => b.pets[2]));
+import { updateAchievements } from './progress.js';
 
 const DEFINITIONS = [
   { key: 'eggs_stolen', label: 'Eggs Stolen', type: 'number', sortOrder: 1 },
@@ -14,29 +11,35 @@ const DEFINITIONS = [
   { key: 'pets', label: 'Pets Hatched', type: 'number', sortOrder: 4 },
   { key: 'rebirths', label: 'Rebirths', type: 'number', sortOrder: 5 },
   { key: 'pets_found', label: 'Index Pets Found', type: 'number', sortOrder: 6 },
-  // achievements
+  // achievements: saved records that never go down (progress.updateAchievements)
   { key: 'best_stage', label: 'Furthest Stage Reached', type: 'number', sortOrder: 7 },
-  { key: 'giants', label: 'Giant Animals Owned', type: 'number', sortOrder: 8 },
-  { key: 'weapons', label: 'Weapons Unlocked', type: 'number', sortOrder: 9 },
-  { key: 'treadmill', label: 'Treadmill Level', type: 'number', sortOrder: 10 },
-  { key: 'daily_streak', label: 'Daily Reward Streak', type: 'number', sortOrder: 11 },
+  { key: 'escapes', label: 'Guardian Escapes', type: 'number', sortOrder: 8 },
+  { key: 'treadmill', label: 'Best Training Arena', type: 'number', sortOrder: 9 },
+  { key: 'pen_level', label: 'Pen Level', type: 'number', sortOrder: 10 },
+  { key: 'spin_styles', label: 'Spin Styles Owned', type: 'number', sortOrder: 11 },
+  { key: 'kunoichi', label: 'Kunoichi Hatched', type: 'number', sortOrder: 12 },
+  { key: 'weapons', label: 'Weapons Unlocked', type: 'number', sortOrder: 13 },
+  { key: 'daily_streak', label: 'Best Daily Streak', type: 'number', sortOrder: 14 },
 ];
 const LIMIT = 1_000_000_000;
 
 function valuesFor(p) {
+  const a = updateAchievements(p);
   const raw = {
     eggs_stolen: p.eggsStolen,
     eggs_hatched: p.eggsHatched,
-    speed: p.speed,
+    speed: a.bestSpeed, // the most Speed ever (a rebirth does not lower it)
     pets: p.petsHatched ?? p.pets?.length ?? 0, // every pet ever hatched (selling does not lower it)
     rebirths: p.rebirths || 0,
     pets_found: p.discovered?.length || 0,
-    // the furthest stage the player has a pet from (1-10)
-    best_stage: (p.pets || []).reduce((best, pet) => Math.max(best, biomeIndex(pet.egg || PETS[pet.id]?.biome) + 1), 0),
-    giants: (p.pets || []).filter((pet) => GIANTS.has(pet.id)).length,
-    weapons: Math.max(0, (p.weapons?.length || 1) - 1), // the starter bat does not count
-    treadmill: Math.max(0, TREADMILLS.findIndex((t) => t.id === p.treadmill)),
-    daily_streak: p.daily?.streak || 0,
+    best_stage: a.bestStage,
+    escapes: a.escapes,
+    treadmill: a.bestArena,
+    pen_level: a.bestPen,
+    spin_styles: a.spinStyles,
+    kunoichi: a.kunoichi,
+    weapons: Math.max(0, (p.weapons?.length || 1) - 1), // the starter weapon does not count
+    daily_streak: a.bestStreak,
   };
   const values = {};
   for (const [k, v] of Object.entries(raw)) {

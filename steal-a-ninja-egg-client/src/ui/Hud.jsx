@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import './hud.css';
 import { useUi, uiStore } from './store.js';
 import { DifficultyFace } from './popupIcons.jsx';
-import { InvitePopup, OfflinePopup, SellShopPopup, TrailsShopPopup, OpenedReveal, PetPic, RebirthPopup, SideMenu } from './Popups.jsx';
+import { InvitePopup, OfflinePopup, SellShopPopup, SpinShopPopup, TrailsShopPopup, OpenedReveal, PetPic, RebirthPopup, SideMenu } from './Popups.jsx';
 import { ConfirmBox, DailyPopup, GiftPicker, PetIndexPopup, ShopPopup, SpecialOfferPopup, WeaponIndexPopup, YourPetsPopup } from './GamePopups.jsx';
 import { weaponById } from '../shared/progression.js';
 import { BIOMES, DIFFICULTY_COLOR, RARITY_COLOR, RULES, formatClock, formatNumber, treadmillById } from '../shared/gameData.js';
@@ -47,6 +47,33 @@ function CashIcon() {
   );
 }
 
+// A whirlwind: stacked swirls, wide at the top (the speed counter and the Spin slot).
+function TornadoIcon({ size = 72 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" aria-hidden="true">
+      {[[20, 7, 16, 4.6], [21, 14, 13, 4], [19, 20.5, 10, 3.6], [21, 26.5, 7.4, 3.1], [20, 32, 5, 2.6], [21, 36.5, 2.8, 2]].map(([cx, cy, rx, ry], i) => (
+        <ellipse key={i} cx={cx} cy={cy} rx={rx} ry={ry} fill={i % 2 ? '#d8f0ff' : '#ffffff'} stroke="#3a6a9a" strokeWidth="1.6" />
+      ))}
+      <path d="M8 8 Q20 12 32 7 M11 15 Q21 18 31 14 M12 21 Q20 23 28 20" stroke="#7fb8e8" strokeWidth="1.3" fill="none" />
+    </svg>
+  );
+}
+
+// A stack of green banknotes with a gold band (the cash counter).
+function MoneyIcon({ size = 72 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" aria-hidden="true">
+      {[0, 1, 2].map((i) => (
+        <g key={i} transform={`translate(${i * 1.5} ${18 - i * 6}) rotate(-8 18 10)`}>
+          <rect x="3" y="4" width="30" height="13" rx="2" fill={i === 2 ? '#5fe05a' : '#3fbf3a'} stroke="#14141a" strokeWidth="2" />
+          <circle cx="18" cy="10.5" r="3.4" fill="#2a9a2a" stroke="#14141a" strokeWidth="1.2" />
+        </g>
+      ))}
+      <rect x="15" y="8" width="7" height="24" rx="1.5" fill="#ffd21f" stroke="#14141a" strokeWidth="1.6" transform="rotate(-8 18 20)" />
+    </svg>
+  );
+}
+
 function Prompt({ prompt }) {
   return (
     <div className={`prompt${prompt.fill !== null && prompt.fill !== undefined ? ' hold' : ''}`} style={{ left: prompt.x, top: prompt.y }}>
@@ -65,15 +92,55 @@ function Prompt({ prompt }) {
   );
 }
 
-// The hotbar: 1 = your weapon (the bat, or a sword from the Weapon Index). Click (or press 1) to swing it.
-function Hotbar({ onSwing, axe }) {
-  const weapon = weaponById(axe);
+// The hotbar (like the video): 1 = Spin (click or press 1: a quick spin that dazes a guardian next to
+// you), 2 = the egg in your hands (empty while you carry none).
+// A whirlwind drawn to look solid (3D): stacked swirl rings shaded light to dark round each one,
+// a highlight on top, a shadow under it and streaks of wind round the rings.
+function Tornado3DIcon({ size = 58, on = false }) {
+  const rings = [[20, 6.5, 15, 4.4], [21, 12.6, 12.4, 3.9], [19.4, 18.4, 9.8, 3.4], [20.6, 23.6, 7.4, 2.9], [19.8, 28.2, 5.2, 2.4], [20.4, 32.2, 3.2, 1.9], [20, 35.4, 1.8, 1.4]];
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" aria-hidden="true">
+      <defs>
+        <linearGradient id="tw-side" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stopColor={on ? '#9fd8ff' : '#b8c8dc'} />
+          <stop offset="0.45" stopColor="#ffffff" />
+          <stop offset="1" stopColor={on ? '#4aa0f0' : '#7e93b0'} />
+        </linearGradient>
+        <linearGradient id="tw-top" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stopColor="#ffffff" />
+          <stop offset="1" stopColor={on ? '#c8ecff' : '#dfe8f2'} />
+        </linearGradient>
+        <radialGradient id="tw-shadow">
+          <stop offset="0" stopColor="rgba(0,0,0,0.45)" />
+          <stop offset="1" stopColor="rgba(0,0,0,0)" />
+        </radialGradient>
+      </defs>
+      <ellipse cx="20" cy="37.6" rx="6" ry="1.6" fill="url(#tw-shadow)" />
+      {[...rings].reverse().map(([cx, cy, rx, ry], i) => (
+        <g key={i}>
+          <ellipse cx={cx} cy={cy + ry * 0.35} rx={rx} ry={ry} fill="url(#tw-side)" stroke="#2c4a70" strokeWidth="0.9" />
+          <ellipse cx={cx} cy={cy - ry * 0.12} rx={rx * 0.86} ry={ry * 0.62} fill="url(#tw-top)" />
+          <path d={`M${cx - rx * 0.7} ${cy - ry * 0.1} Q${cx} ${cy + ry * 0.55} ${cx + rx * 0.75} ${cy - ry * 0.2}`} stroke={on ? '#5ab4ff' : '#9fb4cc'} strokeWidth="0.8" fill="none" />
+        </g>
+      ))}
+      <path d="M6 9 Q2 15 7 20" stroke="#ffffff" strokeWidth="1.3" fill="none" strokeLinecap="round" opacity="0.9" />
+      <path d="M34 15 Q38 20 33 25" stroke="#ffffff" strokeWidth="1.1" fill="none" strokeLinecap="round" opacity="0.8" />
+    </svg>
+  );
+}
+
+function Hotbar({ onSwing, egg, tornado }) {
   return (
     <div className="hotbar">
-      <button type="button" className="hot-slot on" onClick={onSwing}>
+      <button type="button" className={`hot-slot spin-slot${tornado ? ' on' : ''}`} onClick={onSwing} title="Turn into a whirlwind (1)">
         <i>1</i>
-        {weapon.id === 'bat' ? <BatIcon size={54} /> : <PetPic id={`weapon:${weapon.id}`} size={62} />}
-        <span>{weapon.name.split(' ').pop()}</span>
+        <Tornado3DIcon size={56} on={tornado} />
+        <span>Spin</span>
+      </button>
+      <button type="button" tabIndex={-1} className={`hot-slot${egg ? '' : ' hot-empty'}`}>
+        <i>2</i>
+        {egg && <EggIcon size={36} />}
+        {egg && <span>{egg}</span>}
       </button>
     </div>
   );
@@ -124,27 +191,32 @@ function NightClock({ clock }) {
   if (!clock) return null;
   return (
     <div className={`night-clock${clock.night ? ' night' : ''}`}>
-      <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true"><path d="M20 3a13 13 0 1 0 9 22A11 11 0 0 1 20 3z" fill="#ffe27a" stroke="#14141a" strokeWidth="2" /></svg>
+      <svg width="58" height="58" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M20 3a13 13 0 1 0 9 22A11 11 0 0 1 20 3z" fill="#5fb8ff" stroke="#14141a" strokeWidth="2" />
+        <path d="M24 6l1 2 2 1-2 1-1 2-1-2-2-1 2-1z M27 14l.6 1.2 1.2.6-1.2.6-.6 1.2-.6-1.2-1.2-.6 1.2-.6z" fill="#ffffff" />
+      </svg>
       <b>{clock.night ? `NIGHT ${formatClock(clock.left * 1000).replace(/m /, ':').replace(/s$/, '')}` : `in ${formatClock(clock.left * 1000)}`}</b>
     </div>
   );
 }
 
-// On your treadmill: how far you are towards the next biome's recommended speed, and the multiplier.
-function TreadmillBar({ stats, meta }) {
+// Spinning in your training arena: how far you are towards the next biome's recommended speed, the
+// multiplier, and the "Exit Arena" button (like the video).
+function TreadmillBar({ stats, meta, onExit }) {
   const next = BIOMES.find((b) => b.speed > stats.speed) || BIOMES[BIOMES.length - 1];
   const prev = [...BIOMES].reverse().find((b) => b.speed <= stats.speed && b !== next)?.speed || 0;
   const k = Math.max(0, Math.min(1, (stats.speed - prev) / Math.max(1, next.speed - prev)));
   const mill = treadmillById(stats.treadmill);
   return (
     <div className="mill-bar">
-      <div className="mill-hint">🏃 Running makes you faster! Jump to stop</div>
+      <div className="mill-hint">🌀 Spinning makes you faster! +{formatNumber(Math.round(mill.gain * (meta?.treadMult || 1) * (1000 / RULES.treadmillStepMs)))} Speed/s</div>
       <div className="mill-row">
         <span>{next.name.toUpperCase()}</span>
         <span>{formatNumber(stats.speed)} / {formatNumber(next.speed)}</span>
       </div>
       <div className="mill-track"><i style={{ width: `${k * 100}%` }} /></div>
-      <div className="mill-mult">+{formatNumber(mill.gain)}/step · x{Number(meta?.treadMult || 1).toFixed(2)}</div>
+      <div className="mill-mult">{mill.name} · +{formatNumber(mill.gain)}/step · x{Number(meta?.treadMult || 1).toFixed(2)}</div>
+      <button type="button" className="exit-arena" onClick={onExit}>Exit Arena</button>
     </div>
   );
 }
@@ -160,15 +232,33 @@ function Reveal({ reveal }) {
   );
 }
 
-// Top right: who you are playing as (your Boxity account, or your Boxity guest name and picture),
-// the sound on/off (Boxity's synced master volume) and your Gems. The game draws no Log in / Log out:
-// Boxity's toolbar does that.
-function ProfileCard({ profile, onMute }) {
+// The connection as signal bars and a number (the ping in ms, or the frame rate until the first
+// ping is back): 4 green bars on a good connection, 3 orange on a fair one, 1 red on a poor one.
+const SIGNAL = { good: [4, '#5ff04a'], fair: [3, '#ffb21f'], poor: [1, '#ff4a4a'] };
+function Signal({ perf }) {
+  const [bars, color] = SIGNAL[perf?.network || 'good'] || SIGNAL.good;
+  const value = perf?.ping ?? perf?.fps;
+  return (
+    <span className="profile-signal" title={perf?.ping != null ? `Ping ${perf.ping} ms` : 'Connection'}>
+      <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true">
+        {[0, 1, 2, 3].map((i) => <rect key={i} x={i * 5.5} y={14 - i * 4} width="4" height={4 + i * 4} rx="1" fill={i < bars ? color : '#5a5d66'} />)}
+      </svg>
+      {value != null && <em>{value}</em>}
+    </span>
+  );
+}
+
+// Top right: who you are playing as (your Boxity account's picture and name, or the Bloxity base
+// character and a random guest name when you are not signed in), the connection, the sound on/off
+// (Boxity's synced master volume) and your Gems. The game draws no Log in / Log out: Boxity's
+// toolbar does that.
+function ProfileCard({ profile, perf, onMute }) {
   if (!profile) return null;
   return (
     <div className="profile-card">
       <img className="profile-pfp" src={profile.pfp} alt="" width="44" height="44" />
       <b className="profile-name">{profile.name}</b>
+      <Signal perf={perf} />
       <button type="button" className="profile-sound" aria-label={profile.muted ? "Sound on" : "Sound off"} onClick={() => onMute(!profile.muted)}>
         <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M3 9h4l5-4v14l-5-4H3z" fill="#c8ccd4" />
@@ -178,9 +268,11 @@ function ProfileCard({ profile, onMute }) {
         </svg>
       </button>
       <i className="profile-split" />
-      <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 2l8.66 5v10L12 22l-8.66-5V7z" fill="#35a8ff" stroke="#1f6ad6" strokeWidth="1.5" />
-        <path d="M12 6l5.2 3v6L12 18l-5.2-3V9z" fill="#7fd0ff" />
+      {/* the Boxity Gem: a purple cut diamond */}
+      <svg width="28" height="26" viewBox="0 0 28 26" aria-hidden="true">
+        <path d="M7 2h14l6 7-13 15L1 9z" fill="#9a4aff" stroke="#5a1aa8" strokeWidth="1.6" strokeLinejoin="round" />
+        <path d="M1 9h26M7 2l3 7 4-7 4 7 3-7M10 9l4 15 4-15" fill="none" stroke="#e8c8ff" strokeWidth="1.2" strokeLinejoin="round" />
+        <path d="M7 2h14l-3 7h-8z" fill="#c890ff" opacity="0.7" />
       </svg>
       <b className="profile-gems">{formatNumber(profile.gems || 0)}</b>
     </div>
@@ -232,41 +324,20 @@ export default function Hud({ onDrop, onSwing, onAction, onMute }) {
       <div className="stats">
         <div className="stat speed">
           <span className="stat-icon">
-            <ShoeIcon />
+            <TornadoIcon size={74} />
             <button type="button" className="stat-plus" aria-label="Buy speed" onClick={() => uiStore.set({ popup: 'shop', shopSection: 'speed' })}>+</button>
           </span>
           <span>{formatNumber(stats.speed)}</span>
         </div>
-        <div className="stat cash"><CashIcon /><span>${formatNumber(stats.cash)}</span><small>+${formatNumber(stats.income)}/s</small></div>
+        <div className="stat cash"><MoneyIcon size={74} /><span>${formatNumber(stats.cash)}</span><small>+${formatNumber(stats.income)}/s</small></div>
       </div>
 
-      {ui.perf.tier && (
-        <div className={`perf perf-${ui.perf.network}`} title="Graphics quality adjusts automatically to keep the game smooth">
-          <b>{ui.perf.tier}</b>
-          <span>{ui.perf.fps} FPS</span>
-          <span>{ui.perf.ping === null ? '-- ms' : `${ui.perf.ping} ms`}</span>
-        </div>
-      )}
-
-      <Hotbar onSwing={onSwing} axe={stats.axe} />
-      <div className="toggles">
-        {[['slowMode', 'Slow Mode'], ['hidePets', 'Hide Pets'], ['hideEggs', 'Hide Eggs']].map(([key, label]) => (
-          <button key={key} type="button" className={`toggle${ui[key] ? ' on' : ''}`} onClick={() => uiStore.set({ [key]: !ui[key] })}>
-            <i /><span>{label}</span>
-          </button>
-        ))}
-      </div>
+      {ui.tip && <div className="tip-banner" key={ui.tip.at}>{ui.tip.text}</div>}
+      <Hotbar onSwing={onSwing} egg={ui.carriedName || null} tornado={!!ui.tornado} />
       <NightClock clock={ui.clock} />
-      {ui.onTreadmill && <TreadmillBar stats={stats} meta={ui.meta} />}
+      {ui.onTreadmill && <TreadmillBar stats={stats} meta={ui.meta} onExit={() => ui.act('exitArena')} />}
 
-      {ui.carried > 0 && (
-        <button type="button" className="drop-btn" onClick={onDrop} aria-label="Drop the egg">
-          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M5 7h14l-1.2 13H6.2zM9 4h6v2H9z" fill="#fff" /></svg>
-          <span>Drop</span>
-          <kbd>Q</kbd>
-        </button>
-      )}
-
+      <ProfileCard profile={ui.profile} perf={ui.perf} onMute={onMute} />
       <SideMenu ui={ui} />
       {ui.popup === 'shop' && <ShopPopup ui={ui} />}
       {ui.popup === 'index' && <PetIndexPopup ui={ui} />}
@@ -276,11 +347,11 @@ export default function Hud({ onDrop, onSwing, onAction, onMute }) {
       {ui.popup === 'offer' && <SpecialOfferPopup ui={ui} />}
       {ui.popup === 'rebirth' && <RebirthPopup ui={ui} />}
       {ui.popup === 'trails' && <TrailsShopPopup ui={ui} />}
+      {ui.popup === 'spin' && <SpinShopPopup ui={ui} />}
       {ui.popup === 'sell' && <SellShopPopup ui={ui} />}
       {ui.popup === 'invite' && <InvitePopup ui={ui} />}
       {ui.opened && <OpenedReveal opened={ui.opened} />}
       {ui.offline && <OfflinePopup ui={ui} />}
-      <ProfileCard profile={ui.profile} onMute={onMute} />
       <GiftPicker ui={ui} />
       <ConfirmBox confirm={ui.confirm} />
     </div>

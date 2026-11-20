@@ -550,6 +550,12 @@ export class BloxityAvatar {
       this._swing('LegR_Offset', Math.max(0, -Math.sin(b)) * -0.55);
       if (this.bones.Spine1) this.bones.Spine1.quaternion.multiply(_qa.setFromAxisAngle(AX_Z, Math.sin(b * 0.5) * 0.18));
       if (this.bones.Neck1) this.bones.Neck1.quaternion.multiply(_qa.setFromAxisAngle(AX_X, Math.abs(Math.sin(b)) * 0.2));
+    } else if (anim === 'spin') {
+      // spinning in the training arena: arms held out in front like a martial-arts stance, a slight crouch
+      this._swing('ArmL_Offset', -1.35 * armFree);
+      this._swing('ArmR_Offset', -1.1 * armFree);
+      this._swing('LegL_Offset', -0.25);
+      this._swing('LegR_Offset', 0.2);
     } else if (anim === 'sit') {
       this._swing('LegL_Offset', -1.45);
       this._swing('LegR_Offset', -1.45);

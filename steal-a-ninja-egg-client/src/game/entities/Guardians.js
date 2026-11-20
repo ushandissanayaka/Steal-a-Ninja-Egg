@@ -4,12 +4,15 @@
 // over the red line. A bat hit dazes it for a moment (spinning stars).
 
 import * as THREE from 'three';
-import { BIOMES, GUARDIANS } from '../../shared/gameData.js';
+import { BIOMES, GUARDIANS, NEST_RISE, onNestStage } from '../../shared/gameData.js';
 import { canvasTexture, drawOutlinedText, FONT_TITLE, FONT_UI } from '../util/canvasText.js';
 import { Voxels } from '../util/bake.js';
 import { voxelMaterial } from '../util/materials.js';
 import { CREATURE_BUILDERS } from './Creatures.js';
 import { HORRORS, buildHorror } from './Horrors.js';
+import { NINJA_GUARDIANS, buildNinjaGuardian } from './NinjaGuardians.js';
+import { AURAS, GuardianAura } from './GuardianAura.js';
+import { Tornado, WhirlTrail } from './Tornado.js';
 
 const _viewer = new THREE.Vector3();
 
@@ -177,7 +180,13 @@ export class GuardianView {
     this.float = !!def.float; // ghosts and glitches hover instead of running
     this.root = new THREE.Group();
     this.body = new THREE.Group();
-    if (HORRORS.has(state.type)) {
+    if (NINJA_GUARDIANS.has(state.type)) {
+      // the first two stages: a Bloxity character in karate gi (see NinjaGuardians.js)
+      this.model = buildNinjaGuardian(state.type);
+      this.ninja = true;
+      this.mesh = this.model.root;
+      this.eyes = [];
+    } else if (HORRORS.has(state.type)) {
       // from the second biome on: a realistic horror (its own eyes, jaw and limbs, see Horrors.js)
       this.model = buildHorror(state.type);
       this.mesh = this.model.root;
@@ -195,13 +204,31 @@ export class GuardianView {
       });
     }
     this.mesh.scale.setScalar(def.scale * GUARDIAN_SIZE);
+    this.baseScale = def.scale * GUARDIAN_SIZE;
     this.body.add(this.mesh);
     this.root.add(this.body);
-    const box = new THREE.Box3().setFromObject(this.mesh);
-    this.height = box.max.y;
-    this.root.position.set(state.x, 0, state.z);
+    // (a dressed character loads in later, so it says how tall it is)
+    this.height = this.ninja ? this.model.height * this.mesh.scale.y : new THREE.Box3().setFromObject(this.mesh).max.y;
+    // the first six guardians: their power round them, in their stage's colour (GuardianAura.js)
+    if (AURAS[state.type]) {
+      const bones = this.model?.avatar?.bones;
+      const hands = bones ? () => {
+        const l = bones.ArmL2_leaf || bones.ArmL2, r = bones.ArmR2_leaf || bones.ArmR2;
+        if (!l || !r) return null;
+        this.root.updateMatrixWorld(true);
+        return [l, r].map((b) => this.root.worldToLocal(b.getWorldPosition(new THREE.Vector3())));
+      } : null;
+      this.aura = new GuardianAura(this.root, state.type, this.height * 0.92, hands);
+      // when an egg is stolen it turns into a huge whirlwind of its own colours (like the video)
+      const look = AURAS[state.type];
+      this.tornado = new Tornado(this.height * 1.35, { colors: look.stripes, glow: look.glow });
+      this.root.add(this.tornado.root);
+      // the tail it leaves as it whirls after you: dust of its colours and smoke
+      this.trail = new WhirlTrail(scene, this.height * 1.35, look.stripes);
+    }
+    this.root.position.set(state.x, onNestStage(state.x, state.z) ? NEST_RISE : 0, state.z);
     this.root.rotation.y = state.ry;
-    this.target = new THREE.Vector3(state.x, 0, state.z);
+    this.target = new THREE.Vector3(state.x, onNestStage(state.x, state.z) ? NEST_RISE : 0, state.z);
     this.targetRy = state.ry;
     this.t = Math.random() * 10;
     this.speed = 0;
@@ -225,7 +252,7 @@ export class GuardianView {
   }
 
   setState(s) {
-    this.target.set(s.x, 0, s.z);
+    this.target.set(s.x, onNestStage(s.x, s.z) ? NEST_RISE : 0, s.z); // up on its nest's stage, down off it
     this.targetRy = s.ry;
     if (s.mood === 'alert' && this.mood !== 'alert') this.roarT = 0; // it has just woken: the roar starts
     this.mood = s.mood;
@@ -289,13 +316,32 @@ export class GuardianView {
     this.body.rotation.x = (this.mood === 'chase' ? 0.14 : 0) + nod - roar * 0.38 + lunge * 0.32 + quake;
     this.body.rotation.y = this.mood === 'stun' ? Math.sin(this.t * 9) * 0.25 : 0;
 
-    if (this.model) {
+    if (this.ninja) {
+      // the run comes from the rig's own legs, not a gallop of the whole body
+      this.body.position.y = 0;
+      this.model.update({ dt, open: this.eyeOpen, run: run ? 1 : 0, speed: this.speed / this.mesh.scale.x, roar });
+    } else if (this.model) {
       const v = GuardianView.viewer;
       const near = v && Math.hypot(v.x - this.root.position.x, v.z - this.root.position.z) < NAME_NEAR;
       if (near) _viewer.set(v.x, (v.y || 0) + 3, v.z);
       this.model.update({ t: this.t, open: this.eyeOpen, awake: 1 - this.lie, run: run ? 1 : 0, roar: Math.max(roar, lunge), viewer: near ? _viewer : null });
     }
 
+    // awake and after you (the roar, the chase): a whirlwind; asleep or dazed: itself
+    if (this.tornado) {
+      const whirl = this.mood === 'alert' || this.mood === 'chase';
+      this.tornado.update(dt, whirl);
+      const k = this.tornado.k;
+      this.mesh.visible = k < 0.85;
+      this.mesh.scale.setScalar(this.baseScale * Math.max(0.01, 1 - k));
+      // its powers whirl round with the wind
+      if (this.aura) {
+        this.aura.group.rotation.y += dt * 7 * k;
+        this.aura.whirl = k;
+      }
+      this.trail.update(dt, this.root.position, k);
+    }
+    this.aura?.update(dt, 1 - this.lie);
     const top = this.height + hop;
     // the Zs drift up and out to the side and fade while it sleeps: big, so they are seen from far
     for (const z of this.zs) {

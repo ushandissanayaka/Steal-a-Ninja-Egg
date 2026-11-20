@@ -11,8 +11,8 @@ import { authenticateClient } from '../auth/legionAuth.js';
 import { loadProfile, getProfile, holdProfile, releaseProfile, carryGuestProgress, markDirty } from '../game/profiles.js';
 import { eventEgg, hatchResult, nestEgg } from '../game/economy.js';
 import {
-  BIOMES, CYCLE, EGGS, EGG_RARITY, EVENT_EGGS, GUARDIANS, MAX_CLIENTS, NESTS, PETS, PLOT, PLOTS, RANGE, RARITIES, RULES, RUN_PER_GAIN, SHOPS, TREADMILLS, WORLD,
-  biomeById, frozenAt, eggGrowMs, guardianSpeed, inPen, nextTreadmill, onTreadmill, petIncome, plotToWorld, runGain, treadmillById, walkSpeed,
+  BIOMES, CYCLE, EGGS, EGG_RARITY, EVENT_EGGS, GUARDIANS, MAX_CLIENTS, NESTS, PETS, PLOT, PLOTS, RANGE, RARITIES, RULES, RUN_PER_GAIN, SHOPS, TREADMILLS, TREADMILL_ALIAS, WORLD,
+  MAX_PEN_LEVEL, biomeById, biomeIndex, freePenSlot, penSlotOf, frozenAt, eggGrowMs, nextPenLevel, guardianSpeed, inPen, nextTreadmill, onTreadmill, petIncome, plotToWorld, runGain, treadmillById, walkSpeed,
 } from '../shared/gameData.js';
 import { AnimalState, GroundEgg, PlayerState, StartingPlaceState } from './schema.js';
 import * as progress from '../game/progress.js';
@@ -65,6 +65,7 @@ function normalizeProfile(profile) {
   profile.pets = (profile.pets || []).filter((p) => p && typeof p === 'object' && PETS[p.id]);
   if (!finite(profile.cash)) profile.cash = 0;
   if (!finite(profile.speed) || profile.speed < 0) profile.speed = 0;
+  if (TREADMILL_ALIAS[profile.treadmill]) profile.treadmill = TREADMILL_ALIAS[profile.treadmill]; // a removed arena: the best one
   if (!TREADMILLS.some((t) => t.id === profile.treadmill)) profile.treadmill = 'none';
   progress.normalizeProgress(profile);
 }
@@ -90,6 +91,7 @@ export class StartingPlaceRoom extends Room {
     this.brains = new Map();      // guardian / chaser id -> { nest, biome, home, alertUntil, stunUntil }
     this.metaKeys = new Map();    // sessionId -> metaKey when meta was last sent
     this.sidOf = new Map();       // PlayerState -> sessionId (fast lookup)
+    this.mineSent = new Map();    // sessionId -> { allPets, meta } last sent to that player (sendMine)
     this.friendIds = new Map();   // sessionId -> Set of the player's Bloxity friend ids (sent by their client)
     this.lastSecond = Date.now();
     this.lastTick = Date.now();
@@ -138,6 +140,7 @@ export class StartingPlaceRoom extends Room {
     on('hatch', (client, p, m) => this.hatch(client, p, Number(m.i)));
     on('swing', (client, p) => this.swing(client, p));
     on('buyTreadmill', (client, p) => this.buyTreadmill(client, p));
+    on('buyPen', (client, p) => this.buyPen(client, p));
 
     // shop, pets, index, rebirth and the free gift: all paid with (or paying out) cash
     const str = (v) => (typeof v === 'string' ? v.slice(0, 24) : '');
@@ -169,11 +172,15 @@ export class StartingPlaceRoom extends Room {
       p.emote = `${m.id}:${++this.emoteSeq}`;
     });
 
+    // the client is listening now: send it its own private data again, in full
+    on('mine', (client) => { const last = this.mineSent.get(client.sessionId); if (last) this.sendMine(client.sessionId, last, true); });
     on('tutorial', (client, p, m) => this.act(client, p, (pr) => progress.advanceTutorial(pr, str(m.step))));
     on('guideDone', (client, p, m) => this.act(client, p, (pr) => progress.markGuideDone(pr, typeof m.key === 'string' ? m.key.slice(0, 40) : '')));
 
     on('buyTrail', (client, p, m) => this.act(client, p, (pr) => progress.buyTrail(pr, str(m.id))));
     on('equipTrail', (client, p, m) => this.act(client, p, (pr) => progress.equipTrail(pr, str(m.id))));
+    on('buySpin', (client, p, m) => this.act(client, p, (pr) => progress.buySpin(pr, str(m.id))));
+    on('equipSpin', (client, p, m) => this.act(client, p, (pr) => progress.equipSpin(pr, str(m.id))));
     on('lockPet', (client, p, m) => this.act(client, p, (pr) => progress.toggleLock(pr, Number(m.uid))));
     on('sellPets', (client, p, m) => {
       const uids = Array.isArray(m.uids) ? m.uids.map(Number).filter(Number.isInteger) : [];
@@ -249,6 +256,7 @@ export class StartingPlaceRoom extends Room {
     p.cash = profile.cash;
     p.speed = profile.speed;
     p.treadmill = profile.treadmill;
+    p.penLevel = Math.min(MAX_PEN_LEVEL, profile.penLevel || 1);
     this.state.players.set(client.sessionId, p);
     this.sidOf.set(p, client.sessionId);
     this.restoreEggs(p, profile);
@@ -264,10 +272,12 @@ export class StartingPlaceRoom extends Room {
       this.sidOf.delete(p);
     }
     this.state.players.delete(client.sessionId);
-    for (const map of [this.grace, this.lastMove, this.runDistance, this.treadStep, this.lastSwing, this.metaKeys, this.friendIds, this.slow]) map.delete(client.sessionId);
+    for (const map of [this.grace, this.lastMove, this.runDistance, this.treadStep, this.lastSwing, this.metaKeys, this.friendIds, this.slow, this.mineSent]) map.delete(client.sessionId);
     this.refreshAll();
     if (p) {
-      getProfile(p.userId).lastSeen = Date.now(); // offline cash counts from here
+      const profile = getProfile(p.userId);
+      profile.lastSeen = Date.now(); // offline cash counts from here
+      progress.updateAchievements(profile); // the latest records go into the save
       markDirty();
       await releaseProfile(p.userId);
     }
@@ -290,7 +300,7 @@ export class StartingPlaceRoom extends Room {
       const egg = cleanEgg(e);
       if (!egg) return null;
       const grow = eggGrowMs(egg);
-      return { ...egg, grow, left: clamp(Number(e.left) || 0, 0, grow) };
+      return { ...egg, grow, left: clamp(Number(e.left) || 0, 0, grow), ...(Number.isInteger(e.s) ? { s: e.s } : {}) };
     }).filter(Boolean).slice(0, cap));
   }
 
@@ -300,20 +310,38 @@ export class StartingPlaceRoom extends Room {
     const now = Date.now();
     const equipped = progress.equippedPets(profile);
     p.pets = JSON.stringify(equipped.map(({ id, cash, egg, rarity }) => ({ id, cash, egg, rarity })));
-    p.allPets = progress.allPetsJson(profile);
     const friends = this.friendsHere(p);
     p.income = Math.round(petIncome(equipped) * progress.perksOf(profile, now).cash * friendCashMult(friends));
+    progress.updateAchievements(profile); // new records (speed, arena, pen, spin styles...) are kept
     p.cash = profile.cash;
     p.speed = profile.speed;
     p.treadmill = profile.treadmill;
+    p.penLevel = Math.min(MAX_PEN_LEVEL, profile.penLevel || 1);
     p.trail = profile.trail || '';
+    p.spin = profile.spin || 'breeze';
     p.axe = profile.weapon || 'bat';
     const sessionId = this.sessionOf(p);
-    p.meta = progress.metaOf(profile, now, 0, {
-      friendsHere: friends, speedGift: !!profile.speedGift, starterBonus: !!profile.starterBonus,
-      serverLuck: Math.max(0, (this.luckUntil || 0) - now), serverLuckBy: this.luckBy || '',
+    // the pets list and the popups' data (meta) only matter to the player themself: they go to that
+    // one client (and only when they changed), not through the room state to everyone in the room
+    this.sendMine(sessionId, {
+      allPets: progress.allPetsJson(profile),
+      meta: progress.metaOf(profile, now, 0, {
+        friendsHere: friends, speedGift: !!profile.speedGift, starterBonus: !!profile.starterBonus,
+        serverLuck: Math.max(0, (this.luckUntil || 0) - now), serverLuckBy: this.luckBy || '',
+      }),
     });
     this.metaKeys.set(sessionId, this.metaKey(profile, now));
+  }
+
+  // Sends a player their own private data ({ allPets, meta } as JSON strings), only the parts that
+  // changed since the last time. force: everything again (the client asks once it is listening).
+  sendMine(sessionId, data, force = false) {
+    const last = force ? {} : (this.mineSent.get(sessionId) || {});
+    const changed = {};
+    for (const [k, v] of Object.entries(data)) if (v !== last[k]) changed[k] = v;
+    if (!Object.keys(changed).length) return;
+    this.mineSent.set(sessionId, { ...last, ...changed });
+    this.clients.getById(sessionId)?.send('mine', changed);
   }
 
   friendsHere(p) {
@@ -522,7 +550,11 @@ export class StartingPlaceRoom extends Room {
       if (a.mood === 'chase') {
         if (!this.isThief(target)) {
           // made it over the red line (or dropped the egg): it gives up and goes home
-          if (target && target.z > WORLD.lineZ && target.carried !== '[]') this.clients.getById(a.target)?.send('escaped', { name: GUARDIANS[a.type].name });
+          if (target && target.z > WORLD.lineZ && target.carried !== '[]') {
+            this.clients.getById(a.target)?.send('escaped', { name: GUARDIANS[a.type].name });
+            progress.addAchievement(getProfile(target.userId), 'escapes'); // an achievement: got away with the egg
+            markDirty();
+          }
           return this.calmDown(a);
         }
         const reach = GUARDIANS[a.type].reach;
@@ -686,6 +718,7 @@ export class StartingPlaceRoom extends Room {
       this.nestRefill.set(egg.nest, now + RULES.nestRespawnMs);
       const profile = getProfile(p.userId);
       profile.eggsStolen = (profile.eggsStolen || 0) + 1;
+      if (biome) progress.reachAchievement(profile, 'bestStage', biomeIndex(biome.id) + 1); // the furthest stage reached
       reportAdd('eggs_stolen', p.userId, 1);
       markDirty();
     }
@@ -718,9 +751,20 @@ export class StartingPlaceRoom extends Room {
     p.carried = JSON.stringify(carried);
     if (!egg) return;
     const grow = eggGrowMs(egg);
-    pen.push({ ...egg, grow, left: grow });
+    // it goes down in a random free nest of the pen
+    const s = freePenSlot(pen, cap) ?? pen.length;
+    pen.push({ ...egg, grow, left: grow, s });
     p.pen = JSON.stringify(pen);
-    client.send('placed', { slot: pen.length - 1, rarity: egg.rarity });
+    // the first egg put down pays enough to unlock the training arena (the guide sends you there next)
+    let bonus = 0;
+    if (!profile.starterBonus) {
+      bonus = STARTER_BONUS;
+      profile.cash += bonus;
+      profile.starterBonus = true;
+      this.refreshPets(p, profile);
+      markDirty();
+    }
+    client.send('placed', { slot: s, rarity: egg.rarity, bonus });
   }
 
   hatch(client, p, i) {
@@ -728,7 +772,8 @@ export class StartingPlaceRoom extends Room {
     const e = pen[i];
     if (!e || e.left > 0) return;
     const plot = PLOTS[p.plot];
-    const slot = PLOT.eggSlots[i];
+    const s = penSlotOf(e, i);
+    const slot = PLOT.eggSlots[s];
     const at = plotToWorld(plot, slot.x, slot.z);
     if (!near(p, at.x, at.z, RANGE.slot)) return;
     pen.splice(i, 1);
@@ -740,22 +785,21 @@ export class StartingPlaceRoom extends Room {
     profile.eggsHatched = (profile.eggsHatched || 0) + 1;
     if (!pet) {
       markDirty();
-      client.send('duplicate', { egg, biome, slot: i });
+      client.send('duplicate', { egg, biome, slot: s });
       return;
     }
     progress.addPet(profile, pet);
-    // the first hatch pays enough for the first treadmill
+    // (older saves that never put an egg down still get the starter cash on their first hatch)
     let bonus = 0;
     if (!profile.starterBonus) {
       bonus = STARTER_BONUS;
       profile.cash += bonus;
       profile.starterBonus = true;
-      if (profile.tutorial === 'basics') profile.tutorial = 'shops';
     }
     markDirty();
     this.refreshPets(p, profile);
     const def = PETS[pet.id];
-    client.send('hatched', { pet: pet.id, cash: pet.cash, name: def.name, rarity: pet.rarity, species: def.rarity, kg: pet.kg, egg, bonus, slot: i });
+    client.send('hatched', { pet: pet.id, cash: pet.cash, name: def.name, rarity: pet.rarity, species: def.rarity, kg: pet.kg, egg, bonus, slot: s });
   }
 
   // ------------------------------------------------------------------ the bat
@@ -794,16 +838,30 @@ export class StartingPlaceRoom extends Room {
   buyTreadmill(client, p, fromShop = false) {
     const profile = getProfile(p.userId);
     const next = nextTreadmill(profile.treadmill);
-    if (!next) return client.send('notice', { text: 'You have the best treadmill!', ok: false });
+    if (!next) return client.send('notice', { text: 'You have the best arena!', ok: false });
     const sign = plotToWorld(PLOTS[p.plot], PLOT.treadmillSign.x, PLOT.treadmillSign.z);
-    if (!fromShop && !near(p, sign.x, sign.z, RANGE.sign * 2.5)) return;
+    if (!fromShop && !near(p, sign.x, sign.z, RANGE.sign * 8)) return;
     if (profile.cash < next.price) return client.send('notice', { text: `You need $${next.price.toLocaleString('en-US')}`, ok: false });
     profile.cash -= next.price;
     profile.treadmill = next.id;
-    if (['basics', 'shops', 'buyTreadmill'].includes(profile.tutorial)) profile.tutorial = 'treadmill';
     markDirty();
     this.refreshPets(p, profile);
     client.send('bought', { id: next.id, name: next.name });
+  }
+
+  // Upgrade Pen (the board by the gate): one more egg slot in the pen.
+  buyPen(client, p) {
+    const profile = getProfile(p.userId);
+    const next = nextPenLevel(Math.min(MAX_PEN_LEVEL, profile.penLevel || 1));
+    if (!next) return client.send('notice', { text: 'Your pen is fully upgraded!', ok: false });
+    const sign = plotToWorld(PLOTS[p.plot], PLOT.penSign.x, PLOT.penSign.z);
+    if (!near(p, sign.x, sign.z, RANGE.sign * 8)) return;
+    if (profile.cash < next.price) return client.send('notice', { text: `You need $${next.price.toLocaleString('en-US')}`, ok: false });
+    profile.cash -= next.price;
+    profile.penLevel = next.level;
+    markDirty();
+    this.refreshPets(p, profile);
+    client.send('notice', { text: `Pen upgraded to Level ${next.level}! +1 egg slot`, ok: true });
   }
 
   // x2 Server Luck for 15 minutes (adds up), for everyone in the server.

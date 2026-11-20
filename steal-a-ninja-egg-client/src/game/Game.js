@@ -9,7 +9,6 @@ import { GuideArrows } from './entities/GuideArrows.js';
 import { QualityManager } from './systems/QualityManager.js';
 import { Sky } from './entities/Sky.js';
 import { StageSkies } from './entities/StageSkies.js';
-import { Planets } from './entities/Planets.js';
 import { TrailRibbon } from './entities/Trail.js';
 import { TreadmillView } from './entities/Treadmill.js';
 import { setPetNight } from './entities/BlockAnimals.js';
@@ -25,12 +24,19 @@ import { prewarmPetThumbs, useRenderer as usePetArtRenderer } from './util/petAr
 import { AudioManager } from './audio/AudioManager.js';
 import { MusicPlayer } from './audio/MusicPlayer.js';
 import { buildStartingPlace } from './scenes/StartingPlace.js';
+import { updateCorridor } from './scenes/BiomeCorridor.js';
+import { FX } from './entities/Tornado.js';
+import { spinById } from '../shared/progression.js';
+import { onBoardButton } from './entities/PlayerBase.js';
+const _ray = new THREE.Raycaster();
+const _ndc = new THREE.Vector2();
 import { CameraController } from './systems/CameraController.js';
 import { InputSystem } from './systems/InputSystem.js';
 import { InteractionSystem } from './systems/InteractionSystem.js';
 import { PhysicsWorld } from './systems/PhysicsWorld.js';
 import { loadFonts } from './util/canvasText.js';
 
+const NEAR_PENS = 2; // other players' pens whose ninjas are shown (the nearest ones)
 const CULL_EVERY = 0.25;      // seconds between draw-distance checks
 const SHAKE_SECONDS = 0.35;
 const CLICK_MOVE_LIMIT = 6;
@@ -57,7 +63,9 @@ const FOG = {
 // your pen) stays sharp and clear even on Low with a bad connection; only the far end is misted.
 const FOG_MIN_NEAR = 100;
 const FOG_MIN_FAR = 230;
-const NIGHT_SKY = new THREE.Color('#1c1238');
+const NIGHT_SKY = new THREE.Color('#1a1d26'); // the mist at night, under the rain clouds
+const EVENING_COLOR = new THREE.Color('#ffc49a');
+const EVENING_SUN = new THREE.Color('#ff9a4a');
 const SUN_COLOR = new THREE.Color('#fff4e0');
 const MOON_COLOR = new THREE.Color('#9fb4ff');
 const LIGHT_DISTANCE = SUN_OFFSET.length();
@@ -133,7 +141,6 @@ export class Game {
     this.sky = new Sky();
     this.scene.add(this.sky.mesh);
     this.stageSkies = new StageSkies(this.scene); // dragons, magic orbs, the giant skull... over some stages
-    this.planets = new Planets(this.scene); // giant ringed planets over the walls
     this.bats = new NightBats(this.scene);
     this.lightDir = SUN_OFFSET.clone().normalize();
 
@@ -163,10 +170,16 @@ export class Game {
       x: this.me.x,
       z: this.me.z,
     });
+    // you spin (and get faster) only in your own arena, once it is unlocked (the server checks the same)
+    this.playerLight = new THREE.PointLight('#ffffff', 0, 46, 1.4); // always there (off by day), so nothing recompiles
+    this.playerLight.position.y = 6;
+    this.player.root.add(this.playerLight);
+    this.player.canSpin = (arena) => arena.plot === this.me?.plot && (this.me?.treadmill || 'none') !== 'none';
     this.scene.add(this.player.root, this.player.trail.mesh);
 
     this.setupInput();
     this.listen();
+    this.room.send('mine'); // listening now: the server sends my own data again, in full
     this.setupQuality();
     this.setupPlatform();
     this.showMyBase();
@@ -275,7 +288,7 @@ export class Game {
     this.input.onKey((code) => {
       if (code === 'KeyE') this.interaction.interact();
       else if (code === 'KeyQ') this.interaction.dropEggs();
-      else if (code === 'Digit1') this.interaction.click(); // the bat
+      else if (code === 'Digit1') this.toggleTornado(); // the Spin button
       else if (code === 'Escape') {
         // close what is open; with nothing open, Escape opens Boxity's menu (the game draws no menu of its own)
         const ui = this.store.get();
@@ -290,7 +303,7 @@ export class Game {
       press = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
     };
     this.onPointerUp = (e) => {
-      if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) < CLICK_MOVE_LIMIT) this.interaction.click();
+      if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) < CLICK_MOVE_LIMIT && !this.clickBoard(e)) this.interaction.click();
       press = null;
     };
     dom.addEventListener('pointerdown', this.onPointerDown);
@@ -305,6 +318,19 @@ export class Game {
 
   listen() {
     const me = () => this.room.sessionId;
+    // my own pets list and popup data: only to me, only what changed (not through the room state)
+    this.room.onMessage('mine', ({ allPets, meta }) => {
+      if (typeof meta === 'string' && meta !== this.metaJson) {
+        this.metaJson = meta;
+        this.meta = safeParse(meta);
+        this.store.set({ meta: { ...this.meta, at: performance.now() } });
+      }
+      if (typeof allPets === 'string' && allPets !== this.allPetsJson) {
+        this.allPetsJson = allPets;
+        const list = safeParse(allPets);
+        this.store.set({ allPets: Array.isArray(list) ? list : [] });
+      }
+    });
     // caught by a guardian: you burst into pieces, are thrown back and the egg goes home to its nest
     // the change of day / night: everyone is sent back to the lobby, facing the glass gate
     this.room.onMessage('teleport', ({ x, z }) => {
@@ -381,10 +407,10 @@ export class Game {
       clearTimeout(this.announceTimer);
       this.announceTimer = setTimeout(() => this.store.set({ announce: null }), big ? 3500 : 6000);
     });
-    this.room.onMessage('placed', () => {
+    this.room.onMessage('placed', ({ bonus } = {}) => {
       this.audio.plop();
       this.interaction.markDone('pen');
-      this.toast('Your egg is growing!', '#7dff3f');
+      this.toast(bonus > 0 ? `Your egg is growing! +$${formatNumber(bonus)} to unlock your Training Arena!` : 'Your egg is growing!', '#7dff3f');
     });
     this.room.onMessage('speedGift', ({ amount }) => {
       this.audio.coin(true);
@@ -414,7 +440,7 @@ export class Game {
       this.store.set({ reveal: { ...result, at: performance.now() } });
       if (result.bonus > 0) {
         clearTimeout(this.bonusTimer);
-        this.bonusTimer = setTimeout(() => this.toast(`First hatch bonus: +${formatNumber(result.bonus)}! Buy your first Treadmill!`, '#7dff3f'), 3300);
+        this.bonusTimer = setTimeout(() => this.toast(`Starter bonus: +$${formatNumber(result.bonus)}!`, '#7dff3f'), 3300);
       }
       clearTimeout(this.revealTimer);
       this.revealTimer = setTimeout(() => this.store.set({ reveal: null }), 3200);
@@ -720,6 +746,36 @@ export class Game {
   }
 
   // back to your own base, popping back into view
+  // Whose ninjas are shown: your own pen, and the ninjas in the NEAR_PENS other pens nearest you;
+  // the rest are hidden (not built, not animated), so a full room of pens never costs more than
+  // three. How many of them show follows the device and the connection (FX.level, the tier):
+  //   full on Ultra:  yours all, the near ones 10 each      full on High: yours all, 8 each
+  //   mid:            yours 10, 5 each                       low / poor connection: yours 6, 2 each
+  // Re-checked twice a second; a pen already shown stays until another is clearly nearer (no flicker
+  // when you stand between two).
+  updatePenViews(dt) {
+    this.penViewT = (this.penViewT || 0) - dt;
+    if (this.penViewT > 0 || !this.me) return;
+    this.penViewT = 0.5;
+    const level = FX.level ?? 2;
+    const [own, others] = level >= 2 ? (this.tier === 'ultra' ? [Infinity, 10] : [Infinity, 8]) : level === 1 ? [10, 5] : [6, 2];
+    const p = this.player.body.pos;
+    const mid = (PLOT.penMinX + PLOT.penMaxX) / 2;
+    const near = this.world.plots
+      .map((view, i) => ({ view, i, d: (() => { const c = plotToWorld(PLOTS[i], mid, 0); return Math.hypot(c.x - p.x, c.z - p.z); })() }))
+      .filter((e) => e.i !== this.me.plot)
+      .sort((a, b) => a.d - b.d);
+    const shown = new Set(near.slice(0, NEAR_PENS).map((e) => e.i));
+    // keep one shown before if it is about as near as the last one picked
+    const lastD = near[NEAR_PENS - 1]?.d ?? Infinity;
+    for (const e of near) if (this.nearPens?.has(e.i) && !shown.has(e.i) && e.d < lastD + 25) {
+      const farthest = [...shown].map((i) => near.find((n) => n.i === i)).sort((a, b) => b.d - a.d)[0];
+      if (farthest && !this.nearPens.has(farthest.i)) { shown.delete(farthest.i); shown.add(e.i); }
+    }
+    this.nearPens = shown;
+    this.world.plots.forEach((view, i) => view.setPetLimit(i === this.me.plot ? own : shown.has(i) ? others : 0));
+  }
+
   sendHome() {
     const at = plotToWorld(PLOTS[this.me.plot], PLOT.spawn.x, (Math.random() - 0.5) * 8); // outside your own pen
     this.player.body.pos.set(at.x, 0, at.z);
@@ -829,15 +885,7 @@ export class Game {
   syncMe() {
     const me = this.me;
     this.eventSounds(me);
-    if (me.meta !== this.metaJson) {
-      this.metaJson = me.meta;
-      this.meta = safeParse(me.meta);
-      this.store.set({ meta: { ...this.meta, at: performance.now() } });
-    }
-    if (me.allPets !== this.allPetsJson) {
-      this.allPetsJson = me.allPets;
-      this.store.set({ allPets: JSON.parse(me.allPets || '[]') });
-    }
+    // (my pets list and popup data arrive in the private 'mine' message, see listen)
     if (me.pen !== this.penJson) {
       this.penJson = me.pen;
       this.store.set({ pen: JSON.parse(me.pen || '[]') });
@@ -850,6 +898,7 @@ export class Game {
       this.room.send('slowMode', { on: slow });
     }
     this.player.setAxe(me.axe || 'bat');
+    this.player.setSpinStyle(me.spin); // my whirlwind's look (Spin Shop)
     this.player.setTrail(me.trail);
     const state = this.room.state;
     this.store.set({
@@ -943,6 +992,8 @@ export class Game {
       const mine = owner?.sessionId === this.room.sessionId;
       const sign = owner ? { name: owner.p.name, mine, pfp: mine ? bloxity.pfp() : this.pfpOf(owner.p) } : null;
       plot.sync(owner?.p || null, mine, sign, mine && this.me.carried !== '[]');
+      // the arena's floor arrows race round while its owner spins in it
+      plot.setSpinning(mine ? this.player.anim === 'spin' : owner?.p.anim === 'spin');
     });
     this.player.setCarried(this.me.carried);
   }
@@ -964,13 +1015,35 @@ export class Game {
     const goal = this.room.state.night ? 1 : 0;
     this.nightK += (goal - this.nightK) * Math.min(1, dt * 0.8);
     const k = this.nightK;
-    this.hemi.intensity = 1.7 - k * 1.3;
-    this.hemi.color.setRGB(1 - k * 0.5, 1 - k * 0.45, 1 - k * 0.1);
-    this.sun.intensity = 2.5 - k * 2.3;
+    // night: cool, bright moonlight, so everything (the plots, the arenas, the eggs, the guardians)
+    // still shows clearly under the dark sky; the lamps and the light beams do the rest
+    this.hemi.intensity = 1.7 - k * 0.75;
+    this.hemi.color.setRGB(1 - k * 0.32, 1 - k * 0.2, 1);
+    this.sun.intensity = 2.5 - k * 1.85;
+    FX.night = k;
+    // my whirlwind lights up the ground round me at night, in its own colour
+    if (this.playerLight) {
+      this.playerLight.intensity = k * (this.player.tornado?.k || 0) * 380;
+      this.playerLight.color.set(spinById(this.me?.spin).glow);
+    }
     this.sky.setNight(k);
+    this.world.lamps?.setNight(k); // the stage lamps come on as night falls
     setPetNight(Math.max(k, this.sky.stage?.dim || 0), this.time); // the animals' glowing parts shine out at night
     if (k > 0.01) this.sky.setFog(NIGHT_SKY, Math.max(this.skyFogAmount || 0, k * 0.5));
     this.updateCelestial(dt);
+    // the evening: the last CYCLE.eveningS seconds of the day the sky turns orange and pink and the
+    // light goes warm and a little lower, before the night's rain clouds come over
+    const { night, clock } = this.room.state;
+    const eveGoal = night ? 0 : Math.max(0, Math.min(1, 1 - (clock || 0) / CYCLE.eveningS));
+    this.eveningK = (this.eveningK || 0) + (eveGoal - (this.eveningK || 0)) * Math.min(1, dt * 0.8);
+    const ev = this.eveningK * (1 - k);
+    this.sky.setEvening(ev);
+    if (ev > 0.001) {
+      this.hemi.color.lerp(EVENING_COLOR, ev * 0.45);
+      this.hemi.intensity *= 1 - ev * 0.2;
+      this.sun.color.lerp(EVENING_SUN, ev * 0.7);
+      this.sun.intensity *= 1 - ev * 0.25;
+    }
     // a dark stage (Blood Moon, the Void...) dims the light and tints it its own colour
     const stage = this.sky.stage;
     if (stage.dim > 0.001) {
@@ -1009,7 +1082,10 @@ export class Game {
     // still moves, updates and draws, instead of the whole frame stopping (which looks like a freeze).
     const safe = this.safe;
     safe('quality', () => this.quality.frame(rawDt, (t) => this.room.send('ping', { t })));
-    TreadmillView.fancy = this.fancy;
+    // the effects' level (see effectLevel): animations and powers show from mid level up, in full on high
+    FX.level = this.effectLevel();
+    FX.fancy = FX.level >= 1;
+    TreadmillView.fancy = FX.fancy;
     this.updateExtras(dt);
     safe('cull', () => this.cull(dt));
     this.time += dt;
@@ -1051,6 +1127,7 @@ export class Game {
     for (const animal of this.animals.values()) if (animal.visible !== false) safe('animal', () => animal.update(dt));
     for (const egg of this.groundEggs.values()) safe('egg', () => egg.update(dt));
     for (const remote of this.remotes.values()) if (remote.root.visible) safe('remote', () => remote.update(dt));
+    safe('penViews', () => this.updatePenViews(dt));
     for (const plot of this.world.plots) safe('plot', () => plot.update(dt));
     safe('effects', () => this.effects.update(dt));
     for (const glow of this.world.boardGlows) glow.uTime.value = this.time;
@@ -1065,19 +1142,23 @@ export class Game {
       this.sky.update(dt, this.camera.position);
       this.sky.setStageAt(this.player.body.pos.z);
       this.stageSkies.update(dt, this.player.body.pos.z);
-      this.planets.update(dt);
+      updateCorridor(dt, this.player.body.pos.z); // the stages' torches, dust and bubbles (only the near ones move)
+      const pad = this.world.spawnPad, me = this.player.body.pos;
+      pad?.update(dt, this.nightK, !!pad && Math.hypot(me.x - pad.x, me.z - pad.z) < 400); // the spawn pad's beam and dust
       this.updateNight(dt);
       this.sun.position.copy(this.player.body.pos).addScaledVector(this.lightDir, LIGHT_DISTANCE);
       this.sun.target.position.copy(this.player.body.pos);
       this.bats.update(dt, this.nightK, this.player.body.pos, this.extrasK);
       const nearGate = Math.abs(this.player.body.pos.z - GATE_Z) < 300; // the ticks only near the corridor mouth
-      if (this.glassGate.update(dt, this.room.state, this.fancy) && nearGate) this.audio.tone(this.room.state.clock <= 1 ? 1320 : 880, 0.09, { type: 'square', vol: 0.12 });
+      if (this.glassGate.update(dt, this.room.state) && nearGate) this.audio.tone(this.room.state.clock <= 1 ? 1320 : 880, 0.09, { type: 'square', vol: 0.12 });
+      if (this.glassGate.justBroke && nearGate) this.audio.shatter(); // the wall breaks apart
     });
 
     safe('interaction', () => {
       this.interaction.update();
       this.interaction.publish();
     });
+    safe('tips', () => this.updateTips(dt));
     safe('arrows', () => this.guideArrows.update(dt, this.player.body.pos, this.interaction.guide));
     safe('network', () => this.sendPosition(dt));
     safe('render', () => {
@@ -1086,6 +1167,66 @@ export class Game {
       }
       this.renderer.render(this.scene, this.camera);
     });
+  }
+
+  // A click on the green button of one of my plot's boards (Upgrade Arena / Upgrade Pen): buy it.
+  clickBoard(e) {
+    const plot = this.world?.plots?.[this.me?.plot];
+    if (!plot || !this.room) return false;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    _ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    _ray.setFromCamera(_ndc, this.camera);
+    const hit = _ray.intersectObjects(plot.boards(), false)[0];
+    if (!hit) return false;
+    const buy = hit.object.userData.buy;
+    if (buy && onBoardButton(hit.uv)) {
+      this.room.send(buy);
+      this.audio.pop?.();
+    }
+    return true; // a click on a board never does anything else
+  }
+
+  // Tips for new players, low on the screen in big letters: each one once (remembered in this
+  // browser), one at a time, as soon as it is useful. They never stop the game.
+  updateTips(dt) {
+    if (!this.tipsSeen) {
+      try { this.tipsSeen = new Set(JSON.parse(localStorage.getItem('sne-tips') || '[]')); } catch { this.tipsSeen = new Set(); }
+      this.tipWait = 4; // a moment after joining before the first one
+    }
+    this.tipWait -= dt;
+    if (this.tipWait > 0 || this.store.get().popup) return;
+    const p = this.player, me = this.me;
+    if (!p || !me) return;
+    const pen = (() => { try { return JSON.parse(me.pen || '[]'); } catch { return []; } })();
+    const plot = PLOTS[me.plot];
+    const inMyPen = plot && Math.hypot(p.body.pos.x - plot.x, p.body.pos.z - plot.z) < 140;
+    const tips = [
+      ['spin', true, '🌀 Click SPIN (or press 1) to turn into a whirlwind! Click again to turn back'],
+      ['arena', p.arena, '⚡ Stay in your Arena to spin faster and faster! Press SPACE to leave it'],
+      ['carry', p.carryTornado, '🥚 You stole an egg! Whirl back to the start before the guardian catches you!'],
+      ['place', p.carrying && !p.carryTornado && inMyPen, '🏠 Click inside your pen to put the egg down to grow'],
+      ['hatch', pen.some((e) => e.left <= 0), '🐣 Your egg is ready! Hold E on it to hatch a ninja'],
+    ];
+    const next = tips.find(([key, when]) => when && !this.tipsSeen.has(key));
+    if (!next) return;
+    this.tipsSeen.add(next[0]);
+    try { localStorage.setItem('sne-tips', JSON.stringify([...this.tipsSeen])); } catch { /* private mode */ }
+    this.store.set({ tip: { text: next[2], at: performance.now() } });
+    clearTimeout(this.tipTimer);
+    this.tipTimer = setTimeout(() => this.store.set({ tip: null }), 7000);
+    this.tipWait = 8; // the next one waits until this one has gone
+  }
+
+  // The Spin button (or 1): turn into a whirlwind, or back. Turning into one is a spin attack too
+  // (it dazes a guardian right next to you, like the bat used to).
+  toggleTornado() {
+    if (!this.player || !this.room) return;
+    const on = this.player.toggleTornado();
+    this.store.set({ tornado: on });
+    if (on) {
+      this.audio.swing();
+      this.room.send('swing');
+    }
   }
 
   // The glass gate (closed for the last seconds of each day / night) is one-way: it stops you walking
@@ -1105,6 +1246,26 @@ export class Game {
   // game carries on.
   // The heavier effects (the glass bursting into a dust spiral, the treadmill smoke spiralling with
   // magic dust) run only on a smooth tier with a good connection; otherwise the plain versions run.
+  // How much of the effects (whirlwind dust, guardian powers, ninjas' powers, magic dust) to show:
+  //   2 full: High / Ultra with a good connection
+  //   1 mid:  Medium, or High / Ultra on a fair connection: every animation shows, with fewer particles
+  //   0 low:  Low, or a poor connection: the plain versions
+  // and at once one level lower (two when it is bad) while the live frame rate dips, before the tier
+  // itself has time to drop, so a heavy moment never turns into lag.
+  effectLevel() {
+    const net = this.network || 'good';
+    let level = this.tier === 'low' || net === 'poor' ? 0 : (this.tier === 'high' || this.tier === 'ultra') && net === 'good' ? 2 : 1;
+    const fps = Math.min(this.quality?.fps ?? 60, this.quality?.recentFps ?? 60);
+    const dip = fps < 30 ? 2 : fps < 44 ? 1 : 0;
+    // a dip counts at once; coming back up waits until the frames have been fine for 4 s (no flicker)
+    const now = performance.now();
+    if (dip >= (this.fxDip || 0)) {
+      if (dip > 0) this.fxDipUntil = now + 4000;
+      this.fxDip = dip;
+    } else if (now > (this.fxDipUntil || 0)) this.fxDip = dip;
+    return Math.max(0, level - this.fxDip);
+  }
+
   get fancy() {
     return (this.tier === 'high' || this.tier === 'ultra') && (this.network || 'good') === 'good';
   }
