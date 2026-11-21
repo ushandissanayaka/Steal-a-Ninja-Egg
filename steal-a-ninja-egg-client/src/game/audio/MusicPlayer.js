@@ -1,14 +1,17 @@
 // The background music: the game's own two tunes (songs.js), played live with the Web Audio API.
-// "Hatchery Hush" in the lobby, "Nest Raid" on the track; going from one to the other fades the
+// "Bamboo Breeze" in the lobby, "Shadow Run" on the track; going from one to the other fades the
 // first out and the second in (setSong). Notes are scheduled a little ahead on the audio clock, so
 // the beat stays steady even when a frame is slow.
 //
 // The instruments (a tune's `sound` picks them):
-//   lead   musicBox: a tinkly bell (a sine with a glassy octave, dying away like a music-box tine)
+//   lead   koto:     a plucked string (a bright twang that bends into the note and rings away)
+//          musicBox: a tinkly bell (a sine with a glassy octave, dying away like a music-box tine)
 //          square:   a bright chip lead
 //   bass   pluck: a soft plucked bass on the beat; drive: a growly eighth-note bass
 //   pad    choir: a ghostly "ooh" (two slightly out-of-tune voices, slow to swell)
+//          flute: a breathy bamboo flute playing the tune's `flute` line (vibrato + air)
 //   drums  soft: a soft kick, a rim click and a shaker; hard: kick, snare, hats and a tom fill
+//          taiko / taikoHard: deep festival drums, a woody clack and a shaker (hard: louder, hats)
 // Every other loop a quiet bell doubles the lead an octave up, for variety.
 
 import { SONGS } from './songs.js';
@@ -116,12 +119,13 @@ export class MusicPlayer {
     const t = t0 + (s % 4 === 2 ? swing * stepDur : s % 2 === 1 ? swing * 0.5 * stepDur : 0);
 
     // drums
-    const soft = sound.drums === 'soft';
-    if (drums.k.includes(s)) this.kick(t, soft ? 0.55 : 0.9);
-    if (drums.s.includes(s)) (soft ? this.rim(t) : this.snare(t));
+    const soft = sound.drums === 'soft' || sound.drums === 'taiko';
+    const taiko = sound.drums === 'taiko' || sound.drums === 'taikoHard';
+    if (drums.k.includes(s)) (taiko ? this.taiko(t, sound.drums === 'taikoHard' ? 0.8 : 0.55, s === 0 ? 1 : 0.8) : this.kick(t, soft ? 0.55 : 0.9));
+    if (drums.s.includes(s)) (taiko ? this.clack(t, sound.drums === 'taikoHard' ? 0.22 : 0.14) : soft ? this.rim(t) : this.snare(t));
     if (drums.h.includes(s)) (soft ? this.noiseHit(t, 0.05, 'highpass', 6500, 0.028) : this.noiseHit(t, 0.035, 'highpass', 7500, 0.05));
     if (drums.o.includes(s)) this.noiseHit(t, 0.12, 'highpass', 7000, 0.035);
-    if (lastBar) for (const [at, m] of drums.fill || []) if (at === s) this.tom(t, midiHz(m));
+    if (lastBar) for (const [at, m] of drums.fill || []) if (at === s) (taiko ? this.taiko(t, 0.45, 0.9, midiHz(m)) : this.tom(t, midiHz(m)));
 
     // bass
     if (sound.bass === 'drive') {
@@ -132,13 +136,16 @@ export class MusicPlayer {
 
     // the pad: the chord swelling in at the top of each bar
     if (sound.pad === 'choir' && s === 0) for (const m of chord.tones) this.choir(midiHz(m), t, stepDur * 16);
+    // the bamboo flute's own line
+    if (sound.pad === 'flute') for (const [at, m, len] of this.song.flute?.[bar] || []) if (at === s) this.flute(midiHz(m), t, stepDur * len);
     // chord stabs on the offbeats
     if (sound.stabs && s % 4 === 2) for (const m of chord.tones) this.note(midiHz(m), t, stepDur * 0.8, 'square', 0.028, 1600);
 
     // the lead melody (with echo)
     for (const [at, m, len] of melody[bar]) {
       if (at !== s) continue;
-      if (sound.lead === 'musicBox') this.musicBox(midiHz(m), t, Math.max(0.5, stepDur * len * 1.6));
+      if (sound.lead === 'koto') this.koto(midiHz(m), t, Math.max(0.35, stepDur * len * 1.8));
+      else if (sound.lead === 'musicBox') this.musicBox(midiHz(m), t, Math.max(0.5, stepDur * len * 1.6));
       else this.note(midiHz(m), t, stepDur * len * 0.92, 'square', 0.065, 2400, true);
       // every other loop: a bell an octave up joins in
       if (this.loop % 2 === 1) this.note(midiHz(m + 12), t, stepDur * len * 0.8, 'sine', 0.03);
@@ -194,6 +201,80 @@ export class MusicPlayer {
     over.frequency.setValueAtTime(freq * 4.02, t); // a little off the exact octave, like metal
     over.connect(og).connect(g);
     for (const o of [tine, over]) { o.start(t); o.stop(t + dur + 0.05); }
+  }
+
+  // a koto string: a bright pluck that bends up into the note and rings away, through the echo
+  koto(freq, t, dur) {
+    const ctx = this.audio.ctx;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.13, t + 0.004);
+    g.gain.setTargetAtTime(0.0001, t + 0.01, dur / 3.5);
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(freq * 9, t);
+    f.frequency.exponentialRampToValueAtTime(freq * 2.2, t + 0.25);
+    f.connect(g);
+    g.connect(this.bus);
+    g.connect(this.delay);
+    const body = ctx.createOscillator();
+    body.type = 'triangle';
+    body.frequency.setValueAtTime(freq * 0.985, t); // the player's finger bends it up into tune
+    body.frequency.exponentialRampToValueAtTime(freq, t + 0.06);
+    body.connect(f);
+    const twang = ctx.createOscillator();
+    twang.type = 'sawtooth';
+    twang.frequency.setValueAtTime(freq * 0.985, t);
+    twang.frequency.exponentialRampToValueAtTime(freq, t + 0.06);
+    const tg = ctx.createGain();
+    tg.gain.setValueAtTime(0.4, t);
+    tg.gain.setTargetAtTime(0.0001, t + 0.005, 0.05);
+    twang.connect(tg).connect(f);
+    for (const o of [body, twang]) { o.start(t); o.stop(t + dur + 0.05); }
+  }
+
+  // a bamboo flute: a soft sine with a slow vibrato and a puff of air at the start
+  flute(freq, t, dur) {
+    const ctx = this.audio.ctx;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.045, t + Math.min(0.25, dur * 0.3));
+    g.gain.setValueAtTime(0.045, t + dur * 0.75);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    g.connect(this.bus);
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(freq, t);
+    const vib = ctx.createOscillator();
+    vib.frequency.value = 5.2;
+    const vg = ctx.createGain();
+    vg.gain.setValueAtTime(0, t);
+    vg.gain.linearRampToValueAtTime(freq * 0.012, t + dur * 0.5); // the vibrato grows into the note
+    vib.connect(vg).connect(o.frequency);
+    o.connect(g);
+    for (const n of [o, vib]) { n.start(t); n.stop(t + dur + 0.05); }
+    this.noiseHit(t, Math.min(0.2, dur * 0.4), 'bandpass', freq * 2, 0.018); // breath
+  }
+
+  // a taiko drum: a deep, round boom with a skin slap on top. freq: its pitch (fills go down)
+  taiko(t, vol, accent = 1, freq = 95) {
+    const ctx = this.audio.ctx;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.setValueAtTime(freq * 1.6, t);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.55, t + 0.3);
+    g.gain.setValueAtTime(vol * accent, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.38);
+    o.connect(g).connect(this.bus);
+    o.start(t);
+    o.stop(t + 0.4);
+    this.noiseHit(t, 0.05, 'lowpass', 900, 0.12 * vol * accent);
+  }
+
+  // a woody clack (the drum's rim / wooden blocks)
+  clack(t, vol) {
+    this.tom(t, 1150, vol, 0.05);
+    this.noiseHit(t, 0.025, 'bandpass', 2600, vol * 0.8);
   }
 
   // a ghostly "ooh": two voices a hair out of tune, slow to swell, dark (low-passed)

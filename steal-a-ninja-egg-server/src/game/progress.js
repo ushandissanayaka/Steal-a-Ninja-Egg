@@ -8,7 +8,8 @@ import {
   TRAILS, TUTORIAL_STEPS, petSellValue, trailById,
   areaById, areaPets, bundlePrice, doubleSpeedPrice, featuredEgg, featuredPrice, perks, petFromArea, potionPrice,
   rebirthNeed, slotPrice,
-  DAILY, MONEY_PACKS, STARTER_PACK, WEAPONS, dailyState, dayNumber, indexPetReward, weaponById, SPIN_STYLES, spinById } from '../shared/progression.js';
+  DAILY, MONEY_PACKS, STARTER_PACK, WEAPONS, dailyState, dayNumber, indexPetReward, weaponById, SPIN_STYLES, spinById,
+  COMMUNITY_EGG, INSTANT_HATCH_MAX_MS, INSTANT_HATCH_MS, instantHatchPrice } from '../shared/progression.js';
 
 const fail = (text) => ({ ok: false, text });
 const done = (text) => ({ ok: true, text });
@@ -62,7 +63,10 @@ export function normalizeProgress(profile, now = Date.now()) {
   profile.trails = (Array.isArray(profile.trails) ? profile.trails : []).filter((id) => trailById(id));
   if (!profile.trails.includes(profile.trail)) profile.trail = '';
   // spin styles: the starter one is always owned
-  profile.spins = [...new Set(['breeze', ...(Array.isArray(profile.spins) ? profile.spins : [])])].filter((id) => SPIN_STYLES.some((s) => s.id === id));
+  // (passes that come with a spin style, like the Golden Dragon Spin, always keep it)
+  const passSpins = Object.keys(PASSES).filter((id) => PASSES[id].spin && profile.passes?.[id]).map((id) => PASSES[id].spin);
+  profile.spins = [...new Set(['breeze', ...(Array.isArray(profile.spins) ? profile.spins : []), ...passSpins])].filter((id) => SPIN_STYLES.some((s) => s.id === id));
+  profile.community = !!profile.community;
   if (!profile.spins.includes(profile.spin)) profile.spin = 'breeze';
   profile.locked = Array.isArray(profile.locked) ? profile.locked : [];
   // the index pays per pet found; areas claimed before that count as all their pets claimed
@@ -103,7 +107,7 @@ export const baseIncome = (profile) => petIncome(equippedPets(profile));
 // What the client needs for the popups. Times are sent as "ms left" so clocks do not have to agree.
 export function metaOf(profile, now, stageLeft = 0, extra = {}) {
   const boosts = {};
-  for (const id of POTION_ORDER) if ((profile.boosts[id] || 0) > now) boosts[id] = profile.boosts[id] - now;
+  for (const id of [...POTION_ORDER, 'instant']) if ((profile.boosts[id] || 0) > now) boosts[id] = profile.boosts[id] - now;
   const featured = featuredEgg(now);
   const k = perksOf(profile, now);
   return JSON.stringify({
@@ -124,6 +128,7 @@ export function metaOf(profile, now, stageLeft = 0, extra = {}) {
     weapon: profile.weapon,
     instantHatches: profile.instantHatches,
     starterPack: profile.starterPack,
+    community: profile.community,
     luck: perksOf(profile, now).luck,
     giftIn: Math.max(0, profile.giftAt - now),
     featured: { type: featured.type, endsIn: featured.endsAt - now },
@@ -195,10 +200,39 @@ const spend = (profile, price) => {
 export function buyPass(profile, id) {
   const pass = PASSES[id];
   if (!pass) return fail('Unknown pass');
-  if (profile.passes[id]) return fail('You already own it');
+  if (profile.passes[id] || (pass.spin && profile.spins.includes(pass.spin))) return fail('You already own it');
   if (!spend(profile, pass.price)) return fail('Not enough cash');
   profile.passes[id] = true;
+  givePassSpin(profile, pass, true);
   return done(`You got ${pass.name}!`);
+}
+
+// a pass that is a spin style (Golden Dragon Spin): owned, and worn straight away when bought
+function givePassSpin(profile, pass, wear) {
+  if (!pass.spin) return;
+  if (!profile.spins.includes(pass.spin)) profile.spins.push(pass.spin);
+  if (wear) profile.spin = pass.spin;
+}
+
+// ------------------------------------------------------------------ 24h Instant Hatch and Community Rewards
+
+export function buyInstantHatch(profile, now) {
+  const until = profile.boosts.instant || 0;
+  if (until - now > INSTANT_HATCH_MAX_MS - INSTANT_HATCH_MS) return fail('Instant Hatch is already full');
+  if (!spend(profile, instantHatchPrice(baseIncome(profile)))) return fail('Not enough cash');
+  profile.boosts.instant = Math.max(now, until) + INSTANT_HATCH_MS;
+  return done('Instant Hatch for 24 hours: every egg is ready right away!');
+}
+
+// The community egg: once per player, hatched on the spot. name: the @username they typed.
+export function claimCommunity(profile, name, now) {
+  if (profile.community) return fail('You already claimed this egg');
+  const clean = String(name || '').replace(/^@/, '').trim();
+  if (!/^[A-Za-z0-9_.]{3,20}$/.test(clean)) return fail('Type your @username first');
+  profile.community = true;
+  profile.communityName = clean;
+  const pets = [addPet(profile, luckyPet(profile, bestBiomeEgg(profile, COMMUNITY_EGG.rarity), now))];
+  return { ...done('Community egg claimed!'), pets };
 }
 
 function addPotion(profile, id, now) {
@@ -235,11 +269,12 @@ export function doubleSpeed(profile) {
 }
 
 // Featured eggs hatch straight away (no growing). Returns the pets too.
-export function buyFeatured(profile, count, now) {
+// payer: who pays (another player when it is a gift)
+export function buyFeatured(profile, count, now, payer = profile) {
   const { type } = featuredEgg(now);
   const price = featuredPrice(type, count);
   if (price === null) return fail('Unknown pack');
-  if (!spend(profile, price)) return fail('Not enough cash');
+  if (!spend(payer, price)) return fail('Not enough cash');
   const pets = [];
   for (let i = 0; i < count; i++) pets.push(addPet(profile, luckyPet(profile, rollEgg(type))));
   const best = pets.reduce((a, b) => (b.cash > a.cash ? b : a));
@@ -273,7 +308,7 @@ export function buySlots(profile) {
   if (price === null || profile.slots >= SLOTS.max) return fail('All slots unlocked');
   if (!spend(profile, price)) return fail('Not enough cash');
   profile.slots = Math.min(SLOTS.max, profile.slots + SLOTS.step);
-  return done(`+${SLOTS.step} pet slots!`);
+  return done(`+${SLOTS.step} Equip! ${profile.slots} ninjas can earn now`);
 }
 
 // ------------------------------------------------------------------ index
@@ -341,14 +376,17 @@ export function buyMoneyPack(profile, id) {
   return done(`+${pack.cash.toLocaleString('en-US')} cash!`);
 }
 
-export function buyStarterPack(profile, now) {
-  if (profile.starterPack) return fail('You already have it');
-  if (!spend(profile, STARTER_PACK.price)) return fail('Not enough cash');
+export function buyStarterPack(profile, now, payer = profile) {
+  if (profile.starterPack) return fail(payer === profile ? 'You already have it' : 'They already have it');
+  if (!spend(payer, STARTER_PACK.price)) return fail('Not enough cash');
   profile.starterPack = true;
   profile.speed += STARTER_PACK.speed;
   profile.cash += STARTER_PACK.cash;
   profile.instantHatches += STARTER_PACK.hatches;
-  const pets = [addPet(profile, luckyPet(profile, bestBiomeEgg(profile, STARTER_PACK.rarity), now))];
+  for (const id of STARTER_PACK.spins) if (!profile.spins.includes(id)) profile.spins.push(id);
+  // wear the best spin style you own now
+  profile.spin = profile.spins.reduce((best, id) => (spinById(id).mult > spinById(best).mult ? id : best), profile.spin);
+  const pets = STARTER_PACK.eggs.flatMap(([rarity, count]) => Array.from({ length: count }, () => addPet(profile, luckyPet(profile, bestBiomeEgg(profile, rarity), now))));
   return { ...done('Starter Pack unlocked!'), pets };
 }
 
@@ -357,10 +395,29 @@ export function buyStarterPack(profile, now) {
 export function giftPass(payer, target, id) {
   const pass = PASSES[id];
   if (!pass) return fail('Unknown pass');
-  if (target.passes[id]) return fail('They already own it');
+  if (target.passes[id] || (pass.spin && target.spins.includes(pass.spin))) return fail('They already own it');
   if (!spend(payer, pass.price)) return fail('Not enough cash');
   target.passes[id] = true;
+  givePassSpin(target, pass, false);
   return done(`You gifted ${pass.name}!`);
+}
+
+export function giftPotion(payer, target, id, now) {
+  if (!POTIONS[id]) return fail('Unknown potion');
+  if ((target.boosts[id] || 0) - now > POTION_MAX_MS - POTION_MS) return fail('Their potion is already full');
+  if (!spend(payer, potionPrice(id, baseIncome(payer)))) return fail('Not enough cash');
+  addPotion(target, id, now);
+  return done(`You gifted a ${POTIONS[id].name} potion!`);
+}
+
+// money packs are paid with the giver's speed
+export function giftMoneyPack(payer, target, id) {
+  const pack = MONEY_PACKS.find((m) => m.id === id);
+  if (!pack) return fail('Unknown pack');
+  if (payer.speed < pack.speed) return fail('Not enough speed');
+  payer.speed -= pack.speed;
+  target.cash += pack.cash;
+  return done(`You gifted $${pack.cash.toLocaleString('en-US')}!`);
 }
 
 export function giftSpeedPack(payer, target, id) {

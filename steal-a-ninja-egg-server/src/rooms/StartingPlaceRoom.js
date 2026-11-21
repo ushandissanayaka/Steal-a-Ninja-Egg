@@ -138,6 +138,18 @@ export class StartingPlaceRoom extends Room {
     on('drop', (_client, p) => this.dropCarried(p));
     on('place', (client, p) => this.autoPlace(client, p)); // E held in your own pen: the egg goes down to grow
     on('hatch', (client, p, m) => this.hatch(client, p, Number(m.i)));
+    // the Eggs panel's Hatch All: every ready egg in your pen hatches, wherever you are
+    on('hatchAll', (client, p) => {
+      const pen = parse(p.pen);
+      if (!pen.some((e) => e.left <= 0)) return client.send('notice', { text: 'No egg is ready yet', ok: false });
+      for (let i = pen.length - 1; i >= 0; i--) if (pen[i].left <= 0) this.hatch(client, p, i, true);
+    });
+    // 24h Instant Hatch: eggs in your pen are ready right away for a day
+    on('buyInstant', (client, p) => this.act(client, p, (pr, now) => progress.buyInstantHatch(pr, now)));
+    on('claimCommunity', (client, p, m) => {
+      const result = this.act(client, p, (pr, now) => progress.claimCommunity(pr, typeof m.name === 'string' ? m.name.slice(0, 40) : '', now));
+      if (result.ok) client.send('opened', { pets: result.pets.map(({ id, cash }) => ({ id, cash })) });
+    });
     on('swing', (client, p) => this.swing(client, p));
     on('buyTreadmill', (client, p) => this.buyTreadmill(client, p));
     on('buyPen', (client, p) => this.buyPen(client, p));
@@ -475,10 +487,11 @@ export class StartingPlaceRoom extends Room {
       if (p.pen !== '[]') {
         const pen = parse(p.pen);
         const k = 1000 * nightK * progress.perksOf(profile, now).growth;
+        const instant = (profile.boosts.instant || 0) > now; // 24h Instant Hatch
         let changed = false;
         for (const e of pen) {
           if (e.left <= 0) continue;
-          e.left = Math.max(0, Math.round(e.left - k));
+          e.left = instant ? 0 : Math.max(0, Math.round(e.left - k));
           changed = true;
         }
         if (changed) p.pen = JSON.stringify(pen);
@@ -753,7 +766,7 @@ export class StartingPlaceRoom extends Room {
     const grow = eggGrowMs(egg);
     // it goes down in a random free nest of the pen
     const s = freePenSlot(pen, cap) ?? pen.length;
-    pen.push({ ...egg, grow, left: grow, s });
+    pen.push({ ...egg, grow, left: (profile.boosts.instant || 0) > Date.now() ? 0 : grow, s });
     p.pen = JSON.stringify(pen);
     // the first egg put down pays enough to unlock the training arena (the guide sends you there next)
     let bonus = 0;
@@ -767,7 +780,8 @@ export class StartingPlaceRoom extends Room {
     client.send('placed', { slot: s, rarity: egg.rarity, bonus });
   }
 
-  hatch(client, p, i) {
+  // remote: from the Eggs panel's Hatch All (no need to stand by the egg)
+  hatch(client, p, i, remote = false) {
     const pen = parse(p.pen);
     const e = pen[i];
     if (!e || e.left > 0) return;
@@ -775,7 +789,7 @@ export class StartingPlaceRoom extends Room {
     const s = penSlotOf(e, i);
     const slot = PLOT.eggSlots[s];
     const at = plotToWorld(plot, slot.x, slot.z);
-    if (!near(p, at.x, at.z, RANGE.slot)) return;
+    if (!remote && !near(p, at.x, at.z, RANGE.slot)) return;
     pen.splice(i, 1);
     p.pen = JSON.stringify(pen);
     const { egg, biome } = hatchResult(e);
@@ -899,10 +913,17 @@ export class StartingPlaceRoom extends Room {
     if (!target || target === p) return client.send('notice', { text: 'That player is not here', ok: false });
     const payer = getProfile(p.userId);
     const receiver = getProfile(target.userId);
-    const result = kind === 'pass' ? progress.giftPass(payer, receiver, id) : kind === 'speed' ? progress.giftSpeedPack(payer, receiver, id) : null;
+    const result = kind === 'pass' ? progress.giftPass(payer, receiver, id)
+      : kind === 'speed' ? progress.giftSpeedPack(payer, receiver, id)
+        : kind === 'potion' ? progress.giftPotion(payer, receiver, id, Date.now())
+          : kind === 'money' ? progress.giftMoneyPack(payer, receiver, id)
+            : kind === 'eggs' ? progress.buyFeatured(receiver, Number(id), Date.now(), payer)
+              : kind === 'starter' ? progress.buyStarterPack(receiver, Date.now(), payer) : null;
     if (!result) return;
-    client.send('notice', { text: result.text, ok: result.ok });
+    client.send('notice', { text: result.ok && result.pets ? 'Gift sent!' : result.text, ok: result.ok });
     if (!result.ok) return;
+    // eggs hatch on the spot for the one who gets them
+    if (result.pets) this.clients.getById(to)?.send('opened', { pets: result.pets.map(({ id: pet, cash }) => ({ id: pet, cash })) });
     markDirty();
     this.refreshPets(p, payer);
     this.refreshPets(target, receiver);
