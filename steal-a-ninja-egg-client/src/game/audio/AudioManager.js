@@ -124,11 +124,85 @@ export class AudioManager {
   // closes; and now and then a second, smaller drip after it. A little different every time.
   drop() {
     if (!this.ready) return;
-    const f = 380 + Math.random() * 140;
-    this.noise(0.012, { type: 'highpass', freq: 5000, vol: 0.05 });
-    this.tone(f, 0.075, { f2: f * 3.4, vol: 0.3, attack: 0.0015, at: 0.004 });
-    this.tone(f * 2, 0.04, { f2: f * 5, vol: 0.05, attack: 0.001, at: 0.006 });
-    if (Math.random() < 0.45) this.tone(f * 1.5, 0.05, { f2: f * 4.2, vol: 0.08, attack: 0.001, at: 0.1 + Math.random() * 0.05 });
+    const f = 520 + Math.random() * 160;
+    this.noise(0.01, { type: 'highpass', freq: 6000, vol: 0.035 });                         // the touch
+    this.tone(f, 0.11, { f2: f * 2.6, vol: 0.32, attack: 0.002, at: 0.003 });             // the bloop
+    this.tone(f * 2.01, 0.06, { f2: f * 4.4, vol: 0.05, attack: 0.001, at: 0.005 });
+    this.tone(f * 2.6, 0.25, { type: 'sine', vol: 0.025, attack: 0.01, at: 0.06 });        // the ring left in the water
+    // a smaller drip and its ripple, a moment later (most clicks)
+    if (Math.random() < 0.6) {
+      const at = 0.12 + Math.random() * 0.06, f2 = f * (1.3 + Math.random() * 0.3);
+      this.tone(f2, 0.07, { f2: f2 * 2.8, vol: 0.09, attack: 0.001, at });
+    }
+  }
+
+  // a purchase that went through: a cash-register "cha", two coins and a rising sparkle
+  buy() {
+    if (!this.ready) return;
+    this.noise(0.08, { type: 'bandpass', freq: 3200, q: 1.2, vol: 0.12 });
+    this.tone(1319, 0.09, { type: 'square', vol: 0.06, at: 0.03 });
+    this.tone(1760, 0.3, { type: 'square', vol: 0.06, at: 0.1 });
+    [76, 79, 83, 88, 91].forEach((m, i) => this.tone(midiHz(m), 0.32, { type: 'triangle', vol: 0.1, at: 0.16 + i * 0.05 }));
+    [88, 95].forEach((m) => this.tone(midiHz(m), 0.8, { type: 'sine', vol: 0.05, at: 0.42 }));
+    for (let i = 0; i < 6; i++) this.tone(2400 + Math.random() * 2600, 0.1, { vol: 0.025, at: 0.35 + i * 0.06 });
+  }
+
+  // claiming a reward (index, daily, gifts): a soft bell chord with sparkles
+  claim() {
+    if (!this.ready) return;
+    [72, 76, 79].forEach((m, i) => this.tone(midiHz(m), 0.6, { type: 'triangle', vol: 0.09, at: i * 0.04 }));
+    this.tone(midiHz(84), 0.9, { type: 'sine', vol: 0.07, at: 0.14 });
+    for (let i = 0; i < 4; i++) this.tone(2600 + Math.random() * 2000, 0.09, { vol: 0.025, at: 0.2 + i * 0.07 });
+  }
+
+  // turning into a whirlwind: a soft gust that swirls up, with a little airy chime on top
+  spinUp() {
+    if (!this.ready) return;
+    this.noise(0.55, { type: 'bandpass', freq: 300, freq2: 1800, q: 1.8, vol: 0.16, attack: 0.12 });
+    this.noise(0.4, { type: 'bandpass', freq: 900, freq2: 3200, q: 4, vol: 0.06, attack: 0.1, at: 0.15 });
+    this.tone(660, 0.4, { type: 'sine', f2: 1320, vol: 0.035, attack: 0.08, at: 0.12 });
+  }
+
+  // the quiet wind that goes on while you spin (level 0..1; 0 fades it out). A looped soft noise
+  // through a band filter that wavers slowly, so it sounds like air swirling round you.
+  setWind(level) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    if (!this.wind) {
+      if (level <= 0) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.loop = true;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.Q.value = 2.2;
+      f.frequency.value = 650;
+      const lfo = this.ctx.createOscillator();
+      lfo.frequency.value = 0.9;
+      const lg = this.ctx.createGain();
+      lg.gain.value = 320;
+      lfo.connect(lg).connect(f.frequency);
+      const g = this.ctx.createGain();
+      g.gain.value = 0.0001;
+      src.connect(f).connect(g).connect(this.sfx);
+      src.start();
+      lfo.start();
+      this.wind = { src, lfo, g, level: 0 };
+    }
+    if (Math.abs(this.wind.level - level) < 0.01) return;
+    this.wind.level = level;
+    this.wind.g.gain.setTargetAtTime(Math.max(0.0001, 0.075 * level), t, 0.25);
+  }
+
+  // caught and knocked out: a soft "poof", a falling slide and a gentle, sad little bell tune
+  defeat() {
+    if (!this.ready) return;
+    this.noise(0.35, { type: 'lowpass', freq: 1800, freq2: 200, vol: 0.3 });              // poof
+    this.tone(110, 0.3, { f2: 45, vol: 0.45 });                                            // thump
+    this.tone(880, 0.6, { type: 'triangle', f2: 220, vol: 0.08, at: 0.05 });              // the slide down
+    [79, 76, 72, 67].forEach((m, i) => this.tone(midiHz(m), 0.45, { type: 'sine', vol: 0.12, at: 0.35 + i * 0.16 }));
+    this.tone(midiHz(60), 1.1, { type: 'triangle', vol: 0.07, at: 0.99 });
+    this.tone(midiHz(64), 1.1, { type: 'sine', vol: 0.05, at: 0.99 });
   }
 
   // a growl: a low, rough voice (a sawtooth shaken fast by a second oscillator, so it rasps), from
@@ -319,12 +393,15 @@ export class AudioManager {
     [67, 72, 76].forEach((m, i) => this.tone(midiHz(m), 0.3, { type: 'triangle', vol: 0.12, at: i * 0.07 }));
   }
 
-  // a popup opening
+  // a popup opening: a soft bubbly swoosh
   pop() {
-    this.tone(660, 0.08, { f2: 990, vol: 0.1 });
+    this.noise(0.12, { type: 'bandpass', freq: 800, freq2: 2400, q: 2, vol: 0.06, attack: 0.03 });
+    this.tone(560, 0.12, { f2: 1120, vol: 0.09 });
+    this.tone(1120, 0.18, { type: 'sine', vol: 0.03, at: 0.08 });
   }
 
   dispose() {
+    try { this.wind?.src.stop(); this.wind?.lfo.stop(); } catch { /* already stopped */ }
     window.removeEventListener('pointerdown', this.onButton, true);
     this.ctx?.close().catch(() => {});
   }

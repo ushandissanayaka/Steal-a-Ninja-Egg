@@ -3,7 +3,8 @@ import './hud.css';
 import { useUi, uiStore } from './store.js';
 import { DifficultyFace } from './popupIcons.jsx';
 import { InvitePopup, OfflinePopup, SellShopPopup, SpinShopPopup, TrailsShopPopup, OpenedReveal, PetPic, RebirthPopup, SideMenu } from './Popups.jsx';
-import { ConfirmBox, DailyPopup, GiftPicker, PetIndexPopup, ShopPopup, SpecialOfferPopup, WeaponIndexPopup, YourPetsPopup } from './GamePopups.jsx';
+import { ConfirmBox, DailyPopup, GiftPicker, WeaponIndexPopup, YourPetsPopup } from './GamePopups.jsx';
+import { NinjaIndexPopup, RightPanels, ShopPopup, SpecialOfferPopup } from './ShopIndex.jsx';
 import { weaponById } from '../shared/progression.js';
 import { BIOMES, DIFFICULTY_COLOR, RARITY_COLOR, RULES, formatClock, formatNumber, treadmillById } from '../shared/gameData.js';
 
@@ -289,7 +290,7 @@ export default function Hud({ onDrop, onSwing, onAction, onMute }) {
 
   const { stats } = ui;
   return (
-    <div className={`hud${ui.popup ? ' popup-open' : ''}`}>
+    <div className={`hud${ui.popup ? ' popup-open' : ''}${ui.panel === 'eggs' || ui.panel === 'active' ? ' panel-open' : ''}`}>
       {/* carrying a stolen egg is dangerous: the screen's edges glow red, stronger while a guardian chases you */}
       <div className={`danger-vignette${ui.carried > 0 ? ' on' : ''}${ui.chased ? ' chased' : ''}`} aria-hidden="true" />
       {ui.objective && (
@@ -339,8 +340,9 @@ export default function Hud({ onDrop, onSwing, onAction, onMute }) {
 
       <ProfileCard profile={ui.profile} perf={ui.perf} onMute={onMute} />
       <SideMenu ui={ui} />
+      <RightPanels ui={ui} />
       {ui.popup === 'shop' && <ShopPopup ui={ui} />}
-      {ui.popup === 'index' && <PetIndexPopup ui={ui} />}
+      {ui.popup === 'index' && <NinjaIndexPopup ui={ui} />}
       {ui.popup === 'daily' && <DailyPopup ui={ui} />}
       {ui.popup === 'pets' && <YourPetsPopup ui={ui} />}
       {ui.popup === 'weapons' && <WeaponIndexPopup ui={ui} />}

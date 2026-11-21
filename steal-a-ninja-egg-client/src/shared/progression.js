@@ -24,6 +24,8 @@ export const PASSES = {
   tread2: { name: 'x2 Arena', lines: ['Arena gives', 'x2 speed!'], price: 50_000, theme: 'blue', icon: 'axe' },
   vip: { name: 'VIP', lines: ['Permanent +25% Cash', 'Permanent +25% Speed gain'], price: 120_000, theme: 'vip', icon: 'crown' },
   luck2: { name: 'x2 Luck', lines: ['Your eggs hatch', 'x2 luckier: bigger pets!'], price: 35_000, theme: 'lime', icon: 'luck' },
+  // the shop's big orange card: the Golden Dragon spin style (x10 speed while you spin), straight away
+  goldSpin: { name: 'Golden Dragon Spin', lines: ['x10 Speed', 'while you spin!'], price: 2_500_000_000, theme: 'orange', icon: 'spin', spin: 'goldDragon' },
 };
 export const PASS_ORDER = ['vip', 'cash2', 'growth2', 'crate', 'tread2', 'steal2', 'luck2'];
 
@@ -35,45 +37,51 @@ export const POTION_MAX_MS = 2 * 60 * MINUTE; // buying more adds time, up to th
 export const POTIONS = {
   cash: { name: 'x2 Cash', base: 300, income: 240, theme: 'green', color: '#3fcf4b' },
   treadmill: { name: 'x2 Arena Speed', base: 200, income: 150, theme: 'purple', color: '#35a8ff' },
-  walk: { name: 'x1.25 Walk Speed', base: 120, income: 90, theme: 'sky', color: '#7fe8ff' },
+  walk: { name: 'x1.25 Spin Speed', base: 120, income: 90, theme: 'sky', color: '#7fe8ff' },
   steal: { name: 'x2 Steal Speed', base: 250, income: 180, theme: 'orange', color: '#ff7a2a' },
   growth: { name: 'x2 Growing Speed', base: 100, income: 60, theme: 'pink', color: '#ff5fa8' },
 };
 export const POTION_ORDER = ['cash', 'treadmill', 'walk', 'steal', 'growth'];
+// the three the shop sells (like the video): blue Spin Speed, green Cash, red Arena Speed
+export const SHOP_POTIONS = ['walk', 'cash', 'treadmill'];
 export const BUNDLE_SAVE = 0.31;
 export const potionPrice = (id, income) => Math.round(Math.max(POTIONS[id].base, (income || 0) * POTIONS[id].income));
 export const bundlePrice = (income) => Math.round(POTION_ORDER.reduce((sum, id) => sum + potionPrice(id, income), 0) * (1 - BUNDLE_SAVE));
 
 // ------------------------------------------------------------------ speed
 
-// Bigger packs are cheaper per point of speed (from $8 down to $4.80 a point).
+// Bigger packs are cheaper per point of speed (from $6 down to $4 a point).
+// tag: the ribbon over the card.
 export const SPEED_PACKS = [
-  { id: 's1', amount: 5_000, price: 40_000 },
-  { id: 's2', amount: 30_000, price: 220_000 },
-  { id: 's3', amount: 150_000, price: 1_000_000 },
-  { id: 's4', amount: 600_000, price: 3_600_000 },
-  { id: 's5', amount: 2_500_000, price: 13_000_000 },
-  { id: 's6', amount: 5_000_000, price: 24_000_000, best: true },
+  { id: 'sp1', amount: 150_000, price: 900_000 },
+  { id: 'sp2', amount: 1_000_000, price: 5_500_000, tag: 'BEST SELLING!' },
+  { id: 'sp3', amount: 10_000_000, price: 50_000_000 },
+  { id: 'sp4', amount: 50_000_000, price: 220_000_000 },
+  { id: 'sp5', amount: 1_000_000_000, price: 4_000_000_000, tag: 'BEST DEAL!', best: true },
 ];
 export const doubleSpeedPrice = (speed) => Math.max(300, Math.round(speed * 0.3));
 
 // ------------------------------------------------------------------ money (paid with speed)
 
-// Cash for some of your speed. Always under $0.12 a point, the cheapest speed in the shop, so
-// buying speed to sell it back never makes money.
+// Cash for some of your speed. Always under $0.75 a point, far below the cheapest speed in the
+// shop ($4 a point), so buying speed to sell it back never makes money.
 export const MONEY_PACKS = [
-  { id: 'm1', cash: 2_400, speed: 24_000 },
-  { id: 'm2', cash: 20_000, speed: 190_000 },
-  { id: 'm3', cash: 80_000, speed: 740_000 },
-  { id: 'm4', cash: 400_000, speed: 3_600_000 },
-  { id: 'm5', cash: 800_000, speed: 7_000_000, best: true },
+  { id: 'm1', cash: 500_000, speed: 1_000_000 },
+  { id: 'm2', cash: 2_500_000, speed: 4_500_000 },
+  { id: 'm3', cash: 15_000_000, speed: 25_000_000 },
+  { id: 'm4', cash: 100_000_000, speed: 150_000_000 },
+  { id: 'm5', cash: 500_000_000, speed: 700_000_000, best: true },
 ];
 
 // ------------------------------------------------------------------ featured offers
 
-// One time only: a Secret egg (hatched on the spot), speed, cash and three instant hatches (each
-// finishes one egg growing in your pen).
-export const STARTER_PACK = { price: 20_000, speed: 10_000, cash: 50_000, hatches: 3, rarity: 'Secret' };
+// One time only: six ninja eggs hatched on the spot (1 Mythic, 3 Legendary, 2 Epic, from the
+// furthest stage you have a ninja from), two spin styles, three instant hatches (each finishes one
+// egg growing in your pen), cash and speed. was: the struck-out price next to the real one.
+export const STARTER_PACK = {
+  price: 50_000, was: 250_000, speed: 100_000, cash: 100_000, hatches: 3,
+  eggs: [['Mythic', 1], ['Legendary', 3], ['Epic', 2]], spins: ['frost', 'flame'],
+};
 // x2 Server Luck: for 15 minutes every nest in the server lays rarer eggs, for everyone.
 export const SERVER_LUCK_MS = 15 * MINUTE;
 export const serverLuckPrice = (income) => Math.round(Math.max(5_000, (income || 0) * 600));
@@ -106,7 +114,11 @@ export function eggRates(type) {
 
 // ------------------------------------------------------------------ pets: slots and storage
 
-export const SLOTS = { start: 3, step: 3, max: 15, prices: [2_000, 40_000, 800_000, 15_000_000] };
+// "+1 Equip": one more ninja earning in your pen each time, each ~4x the price of the last.
+export const SLOTS = {
+  start: 3, step: 1, max: 15,
+  prices: [1_500, 6_000, 25_000, 100_000, 400_000, 1_600_000, 6_500_000, 26_000_000, 100_000_000, 400_000_000, 1_600_000_000, 6_500_000_000],
+};
 export const slotPrice = (slots) => SLOTS.prices[(slots - SLOTS.start) / SLOTS.step] ?? null;
 export const MAX_PETS = 150; // past this, the weakest unequipped pet is let go
 
@@ -206,6 +218,19 @@ export const weaponById = (id) => WEAPONS.find((w) => w.id === id) || WEAPONS[0]
 
 export const GIFT_MS = 15 * MINUTE;
 export const giftAmount = (income) => Math.round(Math.max(250, (income || 0) * 90));
+
+// ------------------------------------------------------------------ 24h Instant Hatch (the Eggs panel)
+
+// For 24 hours every egg put in your pen is ready to hatch straight away. Costs 30 minutes of your
+// income (at least $20K); buying it again adds another 24 hours (up to 3 days).
+export const INSTANT_HATCH_MS = 24 * 60 * MINUTE;
+export const INSTANT_HATCH_MAX_MS = 3 * INSTANT_HATCH_MS;
+export const instantHatchPrice = (income) => Math.round(Math.max(20_000, (income || 0) * 1_800));
+
+// ------------------------------------------------------------------ Community Rewards (the shop's last card)
+
+// Once per player: an Epic egg from the furthest stage you have a ninja from, hatched on the spot.
+export const COMMUNITY_EGG = { rarity: 'Epic' };
 
 // ------------------------------------------------------------------ "grow now" on the egg machine
 

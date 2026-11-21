@@ -87,7 +87,6 @@ export function SideMenu({ ui }) {
   const meta = ui.meta;
   const indexReady = meta && meta.discovered.some((id) => PETS[id] && !(meta.claimedPets || []).includes(id));
   const giftReady = meta && left(meta, meta.giftIn, now) <= 0;
-  const eggReady = ui.pen.some((e) => e.left <= 0);
   const open = (popup) => uiStore.set({ popup, panel: null });
   return (
     <>
@@ -99,13 +98,7 @@ export function SideMenu({ ui }) {
           <i /><span>Slow Mode</span>
         </button>
       </div>
-      <div className="side-tabs">
-        <button type="button" className={`side-tab pets${ui.popup === 'pets' ? ' on' : ''}`} onClick={() => open('pets')} aria-label="Your pets">
-          <PawArt size={36} />
-          {eggReady && <i className="dot">!</i>}
-        </button>
-        <button type="button" className={`side-tab weapons${ui.popup === 'weapons' ? ' on' : ''}`} onClick={() => open('weapons')} aria-label="Weapons"><SwordArt size={46} /></button>
-      </div>
+      {/* the right-hand Active / Eggs tiles are RightPanels (ShopIndex.jsx) */}
     </>
   );
 }

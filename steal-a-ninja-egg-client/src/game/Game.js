@@ -419,11 +419,16 @@ export class Game {
       this.effects.magicDust(new THREE.Vector3(p.x, p.y + 4, p.z), 30, 4, 10);
       this.toast(`FREE ${formatNumber(amount)} Speed claimed! Go steal eggs!`, '#35b8ff');
     });
-    this.room.onMessage('bought', ({ name }) => { this.toast(`You got the ${name}!`, '#7dff3f'); this.audio.coin(true); });
+    this.room.onMessage('bought', ({ name }) => { this.toast(`You got the ${name}!`, '#7dff3f'); this.audio.buy(); });
     // shop / pets / index / rebirth results
     this.room.onMessage('notice', ({ text, ok }) => {
       this.toast(text, ok ? '#7dff3f' : '#ff5a5a');
-      if (ok) this.audio.coin(); else this.audio.error();
+      // the answer to what I just pressed: a purchase, a reward claimed, or anything else
+      const kind = performance.now() - (this.lastAction?.at || 0) < 3000 ? this.lastAction.kind : '';
+      if (!ok) this.audio.error();
+      else if (kind === 'buy') this.audio.buy();
+      else if (kind === 'claim') this.audio.claim();
+      else this.audio.coin();
     });
     this.room.onMessage('opened', ({ pets }) => this.store.set({ opened: { pets, at: performance.now() } }));
     this.room.onMessage('offline', (info) => this.store.set({ offline: info }));
@@ -1097,9 +1102,11 @@ export class Game {
       this.player.update(dt, this.input, this.camController.yaw, this.physics);
       this.blockAtGlass(fromZ);
       if (this.player.justJumped) { this.player.justJumped = false; this.audio.jump(); }
+      // the soft wind round you while you spin (the Spin button or the training arena)
+      this.audio.setWind(this.player.anim === 'spin' || this.player.anim === 'tornado' ? 1 : 0);
       if (this.player.landed()) { // thrown by a guardian, now hits the ground: in pieces
         this.effects.shatter(this.player.body.pos);
-        this.audio.shatter();
+        this.audio.defeat();
         this.player.shatter();
         this.shake(0.9);
       }
@@ -1180,6 +1187,7 @@ export class Game {
     if (!hit) return false;
     const buy = hit.object.userData.buy;
     if (buy && onBoardButton(hit.uv)) {
+      this.noteAction(buy);
       this.room.send(buy);
       this.audio.pop?.();
     }
@@ -1217,6 +1225,13 @@ export class Game {
     this.tipWait = 8; // the next one waits until this one has gone
   }
 
+  // A button in the popups sent this action: remember what kind it was, so the server's answer
+  // (a notice) plays the right sound (a purchase, a reward claimed...).
+  noteAction(type) {
+    const kind = /^(buy|doubleSpeed|gift|rebirth)/.test(type) ? 'buy' : /^claim/.test(type) ? 'claim' : 'other';
+    this.lastAction = { kind, at: performance.now() };
+  }
+
   // The Spin button (or 1): turn into a whirlwind, or back. Turning into one is a spin attack too
   // (it dazes a guardian right next to you, like the bat used to).
   toggleTornado() {
@@ -1224,7 +1239,7 @@ export class Game {
     const on = this.player.toggleTornado();
     this.store.set({ tornado: on });
     if (on) {
-      this.audio.swing();
+      this.audio.spinUp();
       this.room.send('swing');
     }
   }
